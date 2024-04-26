@@ -10,7 +10,6 @@ class RWKV_Tmix_x060c(MyModule):
         self.args = args
         self.n_embd = args.n_embd
         self.layer_id = layer_id
-        self.dim_ffn = args.n_embd * 2
         self.dim_k = args.n_embd
         self.dim_v = args.n_embd
 
@@ -48,8 +47,6 @@ class RWKV_Tmix_x060c(MyModule):
         self.receptance = nn.Linear(args.n_embd, self.dim_k, bias=False) # DK params
         self.key = nn.Linear(args.n_embd, self.dim_k, bias=False) # DK params
         self.value = nn.Linear(args.n_embd, self.dim_v, bias=False) # DV params
-        #self.v_ffn_gate = nn.Linear(args.n_embd, self.dim_v + self.dim_ffn + (self.dim_v + self.dim_ffn), bias=False) # 2D(V+F) params
-        #self.output = nn.Linear(self.dim_v + self.dim_ffn, args.n_embd, bias=False) # D(V+F) params
         self.output = nn.Linear(self.dim_v, args.n_embd, bias=False) # D(V+F) params
         self.ln_x = nn.LayerNorm(args.dim_att)
 

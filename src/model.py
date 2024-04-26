@@ -74,6 +74,8 @@ class Block(nn.Module):
                 self.parallel = True
         elif 'x060c' in os.environ["RWKV_MODEL_TYPE"]:
             self.ffn = RWKV_CMix_x060(args, layer_id)#None
+            if 'x060cp' in os.environ["RWKV_MODEL_TYPE"]:
+                self.parallel = True
         elif 'x052' in os.environ["RWKV_MODEL_TYPE"]:
             self.ffn = RWKV_CMix_x052(args, layer_id)
         elif 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
