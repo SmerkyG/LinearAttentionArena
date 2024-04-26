@@ -57,6 +57,8 @@ class Block(nn.Module):
         if self.layer_id == 0:
             self.ln0 = nn.LayerNorm(args.n_embd)
 
+        self.parallel = False
+
         if 'x060b' in os.environ["RWKV_MODEL_TYPE"]:
             self.att = RWKV_Tmix_x060b(args, layer_id)
         elif 'x060c' in os.environ["RWKV_MODEL_TYPE"]:
@@ -66,8 +68,10 @@ class Block(nn.Module):
         elif 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
             self.att = Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
 
-        if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
+        if 'x060b' in os.environ["RWKV_MODEL_TYPE"]:
             self.ffn = RWKV_CMix_x060(args, layer_id)
+            if 'x060bp' in os.environ["RWKV_MODEL_TYPE"]:
+                self.parallel = True
         elif 'x060c' in os.environ["RWKV_MODEL_TYPE"]:
             self.ffn = RWKV_CMix_x060(args, layer_id)#None
         elif 'x052' in os.environ["RWKV_MODEL_TYPE"]:
@@ -78,6 +82,10 @@ class Block(nn.Module):
         if args.dropout > 0:
             self.drop0 = nn.Dropout(p = args.dropout)
             self.drop1 = nn.Dropout(p = args.dropout)
+        else:
+            self.drop0 = nn.Identity()
+            self.drop1 = nn.Identity()
+
 
     @TCompile
     def forward(self, x, x_emb=None):
@@ -86,14 +94,14 @@ class Block(nn.Module):
         if self.layer_id == 0:
             x = self.ln0(x)
 
-        if self.args.dropout == 0:
-            x = x + self.att(self.ln1(x))
-            if self.ffn is not None:
-                x = x + self.ffn(self.ln2(x))
-        else:
+        if not self.parallel:
             x = self.drop0(x + self.att(self.ln1(x)))
-            if self.ffn is not None:
-                x = self.drop1(x + self.ffn(self.ln2(x)))
+            if self.ln2 is not None and self.ffn is not None:
+                x = self.drop0(x + self.ffn(self.ln2(x)))
+        else:
+            # parallel
+            lnx = self.ln1(x)
+            x = self.drop0(x + self.att(lnx) + self.ffn(lnx))
 
         return x
 
@@ -136,6 +144,8 @@ class RWKV(pl.LightningModule):
 
         if args.dropout > 0:
             self.drop0 = nn.Dropout(p = args.dropout)
+        else:
+            self.drop0 = nn.Identity()
 
     def configure_optimizers(self):
         args = self.args
@@ -228,8 +238,7 @@ class RWKV(pl.LightningModule):
 
         x = self.emb(idx)
 
-        if args.dropout > 0:
-            x = self.drop0(x)
+        x = self.drop0(x)
         for block in self.blocks:
             if args.grad_cp == 1:
                 x = deepspeed.checkpointing.checkpoint(block, x)

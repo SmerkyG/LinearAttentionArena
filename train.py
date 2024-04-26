@@ -58,6 +58,8 @@ if __name__ == "__main__":
     parser.add_argument("--model_type", default="x052", type=str)
     parser.add_argument("--my_exit_tokens", default=0, type=int)
 
+    parser.add_argument("--seed_everything", default=1337, type=int)
+
     if pl.__version__[0] == "2":
         parser.add_argument("--accelerator", default="gpu", type=str)
         parser.add_argument("--strategy", default="auto", type=str)
