@@ -4,12 +4,13 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-class RWKV_Tmix_x060c(MyModule):
+class RWKV_Tmix_x060f(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
         self.n_embd = args.n_embd
         self.layer_id = layer_id
+        self.dim_ffn = int(args.n_embd * 2) // 32 * 32
         self.dim_k = args.n_embd
         self.dim_v = args.n_embd
 
@@ -35,11 +36,6 @@ class RWKV_Tmix_x060c(MyModule):
             self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*3))
             self.time_maa_w2 = nn.Parameter(torch.zeros(3, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
-            decay_speed = torch.ones(args.dim_att)
-            for n in range(args.dim_att):
-                decay_speed[n] = -6 + 5 * (n / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1)
-            self.time_decay = nn.Parameter(decay_speed.reshape(1,1,args.dim_att))
-
             tmp = torch.zeros(args.dim_att)
             for n in range(args.dim_att):
                 zigzag = ((n + 1) % 3 - 1) * 0.1
@@ -51,8 +47,8 @@ class RWKV_Tmix_x060c(MyModule):
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
         self.receptance = nn.Linear(args.n_embd, self.dim_k, bias=False) # DK params
         self.key = nn.Linear(args.n_embd, self.dim_k, bias=False) # DK params
-        self.value = nn.Linear(args.n_embd, self.dim_v, bias=False) # DV params
-        self.output = nn.Linear(self.dim_v, args.n_embd, bias=False) # D(V+F) params
+        self.v_ffn_biggate = nn.Linear(args.n_embd, self.dim_v + self.dim_ffn + self.dim_v + self.dim_ffn, bias=False) # 2D(V+F) params
+        self.output = nn.Linear(self.dim_v + self.dim_ffn, args.n_embd, bias=False) # D(V+F) params
         self.ln_x = nn.LayerNorm(args.dim_att)
 
     @MyFunction
@@ -74,9 +70,12 @@ class RWKV_Tmix_x060c(MyModule):
         xr = x + xx * (self.time_maa_r + mr)
 
         r = self.receptance(xr)
-        w = self.time_decay + self.key(xk)
+        w = self.key(xk)
         k = 1.0 - torch.exp(-torch.exp(w))
-        v = self.value(xv)
+        vffn, biggate = self.v_ffn_biggate(xv).split([self.dim_v+self.dim_ffn, self.dim_v+self.dim_ffn], dim=-1)
+        vffn = vffn * F.silu(biggate)
+        v, ffn = vffn.split([self.dim_v, self.dim_ffn], dim=-1)
+        v = v.contiguous()
         u = self.time_faaaa
 
         # FIXME - GQA
@@ -85,5 +84,6 @@ class RWKV_Tmix_x060c(MyModule):
         x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u)
 
         x = self.ln_x(x)
+        x = torch.cat([x, ffn], dim=-1)
         x = self.output(x)
         return x

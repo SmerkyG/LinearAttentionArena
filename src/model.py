@@ -15,6 +15,8 @@ from pytorch_lightning.strategies import DeepSpeedStrategy
 from .tmix_x052 import RWKV_Tmix_x052
 from .tmix_x060b import RWKV_Tmix_x060b
 from .tmix_x060c import RWKV_Tmix_x060c
+from .tmix_x060f import RWKV_Tmix_x060f
+from .tmix_x060g import RWKV_Tmix_x060g
 
 from .cmix_x052 import RWKV_CMix_x052
 from .cmix_x060 import RWKV_CMix_x060
@@ -61,24 +63,27 @@ class Block(nn.Module):
 
         if 'x060b' in os.environ["RWKV_MODEL_TYPE"]:
             self.att = RWKV_Tmix_x060b(args, layer_id)
-        elif 'x060c' in os.environ["RWKV_MODEL_TYPE"]:
-            self.att = RWKV_Tmix_x060c(args, layer_id)
-        elif 'x052' in os.environ["RWKV_MODEL_TYPE"]:
-            self.att = RWKV_Tmix_x052(args, layer_id)
-        elif 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
-            self.att = Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
-
-        if 'x060b' in os.environ["RWKV_MODEL_TYPE"]:
             self.ffn = RWKV_CMix_x060(args, layer_id)
             if 'x060bp' in os.environ["RWKV_MODEL_TYPE"]:
                 self.parallel = True
         elif 'x060c' in os.environ["RWKV_MODEL_TYPE"]:
-            self.ffn = RWKV_CMix_x060(args, layer_id)#None
+            self.att = RWKV_Tmix_x060c(args, layer_id)
+            self.ffn = RWKV_CMix_x060(args, layer_id)
             if 'x060cp' in os.environ["RWKV_MODEL_TYPE"]:
                 self.parallel = True
+        elif 'x060f' in os.environ["RWKV_MODEL_TYPE"]:
+            self.att = RWKV_Tmix_x060f(args, layer_id)
+            self.ln2 = None
+            self.ffn = None
+        elif 'x060g' in os.environ["RWKV_MODEL_TYPE"]:
+            self.att = RWKV_Tmix_x060g(args, layer_id)
+            self.ln2 = None
+            self.ffn = None
         elif 'x052' in os.environ["RWKV_MODEL_TYPE"]:
+            self.att = RWKV_Tmix_x052(args, layer_id)
             self.ffn = RWKV_CMix_x052(args, layer_id)
         elif 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
+            self.att = Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
             self.ffn = Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
         
         if args.dropout > 0:
