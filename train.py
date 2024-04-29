@@ -8,9 +8,9 @@ logging.basicConfig(level=logging.INFO)
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
-    from pytorch_lightning import Trainer
-    from pytorch_lightning.utilities import rank_zero_info, rank_zero_only
-    import pytorch_lightning as pl
+    from lightning import Trainer
+    from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
+    import lightning as pl
 
     rank_zero_info("########## work in progress ##########")
 
@@ -168,7 +168,7 @@ if __name__ == "__main__":
 #
 # Found torch {torch.__version__}, recommend latest torch
 # Found deepspeed {deepspeed_version}, recommend latest deepspeed
-# Found pytorch_lightning {pl.__version__}, recommend 1.9.5
+# Found lightning {pl.__version__}, recommend 1.9.5
 #
 ############################################################################
 """
@@ -252,12 +252,13 @@ if __name__ == "__main__":
     model.load_state_dict(load_dict)
 
     if pl.__version__[0] == "2":
-        trainer = Trainer(accelerator=args.accelerator, strategy=args.strategy, devices=args.devices, num_nodes=args.num_nodes, precision=args.precision, logger=args.logger, callbacks=[train_callback(args)], max_epochs=args.max_epochs, check_val_every_n_epoch=args.check_val_every_n_epoch, num_sanity_val_steps=args.num_sanity_val_steps, log_every_n_steps=args.log_every_n_steps, enable_checkpointing=args.enable_checkpointing, accumulate_grad_batches=args.accumulate_grad_batches, gradient_clip_val=args.gradient_clip_val)
+        trainer = Trainer(use_distributed_sampler=False, accelerator=args.accelerator, strategy=args.strategy, devices=args.devices, num_nodes=args.num_nodes, precision=args.precision, logger=args.logger, callbacks=[train_callback(args)], max_epochs=args.max_epochs, check_val_every_n_epoch=args.check_val_every_n_epoch, num_sanity_val_steps=args.num_sanity_val_steps, log_every_n_steps=args.log_every_n_steps, enable_checkpointing=args.enable_checkpointing, accumulate_grad_batches=args.accumulate_grad_batches, gradient_clip_val=args.gradient_clip_val)
     else:
         trainer = Trainer.from_argparse_args(
             args,
             callbacks=[train_callback(args)],
         )
+    args.trainer = trainer
 
     if trainer.global_rank == 0:
         for n in model.state_dict():

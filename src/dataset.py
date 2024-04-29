@@ -6,7 +6,7 @@ import json, math, random, os, sys
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from pytorch_lightning.utilities import rank_zero_info
+from lightning_utilities.core.rank_zero import rank_zero_info
 from .binidx import MMapIndexedDataset
 from .utils import MaybeIsPrime
 
@@ -36,9 +36,9 @@ class MyDataset(Dataset):
 
     def __getitem__(self, idx):
         args = self.args
-        rank = self.global_rank
-        epoch = self.real_epoch
-        world_size = self.world_size
+        rank = self.args.trainer.global_rank
+        epoch = self.args.trainer.current_epoch
+        world_size = self.args.trainer.world_size
         # print(f"epoch {epoch} idx {idx} rank {rank}/{world_size}")
 
         ctx_len = args.ctx_len

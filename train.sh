@@ -68,4 +68,4 @@ python train.py --load_model "0" --wandb "Linear_Attention_Arena" --proj_dir $PR
  --num_nodes $N_NODE --micro_bsz $m_bsz --n_layer $layer --n_embd $emb \
  --lr_init $lr_init --lr_final $lr_final --warmup_steps 10 --beta1 0.9 --beta2 0.99 --adam_eps 1e-8 --data_type "binidx" --vocab_size 65536 \
  --weight_decay 0.001 --epoch_save $save_period --head_size_a 64 \
- --accelerator gpu --devices $n_gpu --precision bf16 --strategy deepspeed_stage_2 --grad_cp $grad_cp --enable_progress_bar True --ds_bucket_mb $DS_BUCKET_MB
+ --accelerator gpu --devices $n_gpu --precision bf16 --strategy deepspeed_stage_2 --grad_cp $grad_cp --ds_bucket_mb $DS_BUCKET_MB

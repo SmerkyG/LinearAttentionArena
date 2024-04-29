@@ -1,8 +1,8 @@
 import os, math, time, datetime, subprocess
 import torch
 from torch.utils.data import DataLoader
-import pytorch_lightning as pl
-from pytorch_lightning.utilities import rank_zero_info, rank_zero_only
+import lightning.pytorch as pl
+from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 
 def my_save(args, trainer, dd, ff):
     if 'deepspeed_stage_3' in args.strategy:
