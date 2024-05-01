@@ -22,11 +22,16 @@ from .tmix_x060o import RWKV_Tmix_x060o
 from .cmix_x052 import RWKV_CMix_x052
 from .cmix_x060 import RWKV_CMix_x060
 
+import src.metrics as metrics
+
 if importlib.util.find_spec('deepspeed'):
     import deepspeed
     from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 
 from .CoreDependencies import *
+
+def console_clear_last_line():
+    print('\033[1A', end='\x1b[2K')
 
 try:
     print('RWKV_MODEL_TYPE', os.environ["RWKV_MODEL_TYPE"])
@@ -143,6 +148,8 @@ class L2Wrap(torch.autograd.Function):
 class RWKV(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
+        self.metrics = dict(loss=metrics.Loss(), acc=metrics.Accuracy())
+
         self.args = args
         if not hasattr(args, 'dim_att'):
             args.dim_att = args.n_embd
@@ -266,18 +273,87 @@ class RWKV(pl.LightningModule):
         x = self.head(x)
         return x
 
+    def _get_loss_logits_preds(self, batch, batch_idx):
+        x, y = batch
+        logits = self(x)
+    
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
+        with torch.no_grad():
+            preds = logits.argmax(dim=-1)
+
+        return loss, logits, preds
+    
+    def get_real_global_step(self): return int(self.trainer.global_step + self.args.epoch_begin * self.args.epoch_steps)
+    def get_real_tokens(self): return self.get_real_global_step() * self.args.ctx_len * self.args.real_bsz
+
     def training_step(self, batch, batch_idx):
-        idx, targets = batch
-        logits = self(idx)
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        inputs, labels = batch
+        loss, logits, preds = self._get_loss_logits_preds(batch, batch_idx)
+
+        margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
+        # FIXME - sync from other devices/nodes here
+        for metric in self.metrics.values():
+            metric.update(margs)
+
+        if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0 and (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
+            if self.trainer.is_global_zero:
+                logdict = dict(tokens = self.get_real_tokens())
+                #str = f"epoch:{self.current_epoch} token:{self.all_nodes_tokens_processed:,} step:{batch_idx} "
+                for name, metric in self.metrics.items():
+                    metric_value = metric.compute()
+                    logdict['train/' + name] = metric_value
+                    metric.clear()
+                    self.log(name, metric_value, on_step=True, rank_zero_only=True)
+                    #str += f'{name}:{metric_value:.4f} '
+                #str += f"{gb:.1f}gb {int(ms_per)}ms {ktok_per_sec:.2f}kT/s {self.total_runtime:.1f}sec"
+                #print(str)
+                if len(self.args.wandb) > 0:
+                    self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
 
         return L2Wrap.apply(loss, logits)
 
-    def training_step_end(self, batch_parts):
-        if pl.__version__[0]!='2':
-            all = self.all_gather(batch_parts)
-            if self.trainer.is_global_zero:
-                self.trainer.my_loss_all = all
+    def on_validation_epoch_start(self):
+        if self.trainer.is_global_zero:
+            print(f"STARTING VALIDATION")
+            print()
+
+            # clear metrics
+            for metric in self.metrics.values():
+                metric.compute()
+
+    def on_validation_epoch_end(self):
+        if self.trainer.is_global_zero:
+            logdict = dict(tokens = self.get_real_tokens())
+            str = f"VALIDATION COMPLETE. "
+            for name, metric in self.metrics.items():
+                metric_value = metric.compute()
+                logdict["val/" + name] = metric_value
+                str += f"{metric_value:.4f} "
+                metric.clear()
+            if len(self.args.wandb) > 0:
+                self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
+
+            console_clear_last_line()
+            print(str)
+            print()
+
+    def validation_step(self, batch, batch_idx):
+        inputs, labels = batch
+        loss, logits, preds = self._get_loss_logits_preds(batch, batch_idx)
+        margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
+        for name, metric in self.metrics.items():
+            metric.update(margs)
+            # on_epoch causes this to be logged in aggregate rather than per batch
+            #self.log('val/'+name, metric.compute(), on_epoch=True, rank_zero_only=True)
+            #metric.clear()
+        #self.log("tokens", float(self.all_nodes_tokens_processed), on_epoch=True, rank_zero_only=True)
+        return logits
+
+    # def training_step_end(self, batch_parts):
+    #     if pl.__version__[0]!='2':
+    #         all = self.all_gather(batch_parts)
+    #         if self.trainer.is_global_zero:
+    #             self.trainer.my_loss_all = all
 
     def generate_init_weight(self):
         print(

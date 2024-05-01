@@ -60,3 +60,21 @@ class MyDataset(Dataset):
         y = torch.tensor(dix[1:], dtype=torch.long)
 
         return x, y
+
+class MMapDataset(Dataset):
+    def __init__(self, data_prefix, ctx_len):
+        self.data = MMapIndexedDataset(data_prefix)
+        self.data_size = len(self.data._bin_buffer) // self.data._index._dtype_size
+        self.req_len = ctx_len + 1
+        self.count = self.data_size // self.req_len
+
+    def __len__(self):
+        return self.count
+
+    def __getitem__(self, idx):
+        data_chunk = self.data.get(idx=0, offset=idx * self.req_len, length=self.req_len).astype(int)
+        input_ids = torch.tensor(data_chunk, dtype=torch.long)
+        x = input_ids[:-1]
+        y = input_ids[1:]
+
+        return x, y

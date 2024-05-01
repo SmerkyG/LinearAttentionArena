@@ -21,6 +21,7 @@ if __name__ == "__main__":
     parser.add_argument("--proj_dir", default="out", type=str)
 
     parser.add_argument("--data_file", default="", type=str)
+    parser.add_argument("--validation_data_file", default="", type=str)
     parser.add_argument("--data_type", default="utf-8", type=str)
     parser.add_argument("--vocab_size", default=0, type=int)
 
@@ -60,6 +61,10 @@ if __name__ == "__main__":
 
     parser.add_argument("--seed_everything", default=1337, type=int)
 
+    parser.add_argument("--check_val_every_n_epoch", default=1, type=int)
+    parser.add_argument("--val_check_interval", default=None, type=int)
+    parser.add_argument("--log_every_n_steps", default=50, type=int)
+
     if pl.__version__[0] == "2":
         parser.add_argument("--accelerator", default="gpu", type=str)
         parser.add_argument("--strategy", default="auto", type=str)
@@ -91,11 +96,11 @@ if __name__ == "__main__":
     args.logger = False
     args.gradient_clip_val = 1.0
     args.num_sanity_val_steps = 0
-    args.check_val_every_n_epoch = int(1e20)
-    args.log_every_n_steps = int(1e20)
+    #args.check_val_every_n_epoch = int(1e20)
+    #args.log_every_n_steps = int(1e20)
     args.max_epochs = -1  # continue forever
     args.betas = (args.beta1, args.beta2)
-    args.real_bsz = int(args.num_nodes) * int(args.devices) * args.micro_bsz
+    args.real_bsz = int(args.num_nodes) * int(args.devices) * args.micro_bsz * args.accumulate_grad_batches
     os.environ["RWKV_MODEL_TYPE"] = args.model_type
     os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
@@ -180,7 +185,7 @@ if __name__ == "__main__":
     if args.lr_final == 0 or args.lr_init == 0:
         rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
 
-    assert args.precision in ["fp32", "tf32", "fp16", "bf16"]
+    assert args.precision in ["fp32", "tf32", "fp16", "bf16", "bf16-true", "bf16-mixed"]
     os.environ["RWKV_FLOAT_MODE"] = args.precision
     if args.precision == "fp32":
         for i in range(10):
@@ -200,19 +205,22 @@ if __name__ == "__main__":
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_tf32 = True
 
-    if "32" in args.precision:
-        args.precision = 32
-    elif args.precision == "fp16":
-        args.precision = 16
-    else:
-        args.precision = "bf16"
+    # if "32" in args.precision:
+    #     args.precision = 32
+    # elif args.precision == "fp16":
+    #     args.precision = 16
+    # else:
+    #     args.precision = "bf16"
 
     ########################################################################################################
 
     from src.trainer import train_callback, generate_init_weight
-    from src.dataset import MyDataset
+    from src.dataset import MyDataset, MMapDataset
 
     train_data = MyDataset(args)
+    if args.validation_data_file != "":
+        validation_data = MMapDataset(args.validation_data_file, args.ctx_len)
+    #validation_data = Subset(validation_data, range(1024)) # FIXME - hack to shorten val dataset
     args.vocab_size = train_data.vocab_size
 
     from src.model import RWKV
@@ -274,6 +282,9 @@ if __name__ == "__main__":
         trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = args.ds_bucket_mb * 1000 * 1000
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
-    data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=args.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
+    train_data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=args.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
+    validation_data_loader = None
+    if args.validation_data_file != "":
+        validation_data_loader = DataLoader(validation_data, shuffle=False, pin_memory=True, batch_size=args.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
 
-    trainer.fit(model, data_loader)
+    trainer.fit(model, train_dataloaders=train_data_loader, val_dataloaders=validation_data_loader)
