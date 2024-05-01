@@ -17,13 +17,14 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
         
     class WKV_6(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, B, T, C, H, r, k, v, w, u):
+        def forward(ctx, B, T, C, H, r, k, v, w, u, s):
             with torch.no_grad():
                 assert r.dtype == torch.bfloat16
                 assert k.dtype == torch.bfloat16
                 assert v.dtype == torch.bfloat16
                 assert w.dtype == torch.bfloat16
                 assert u.dtype == torch.bfloat16
+                assert s.dtype == torch.bfloat16
                 assert HEAD_SIZE == C // H
                 ctx.B = B
                 ctx.T = T
@@ -34,9 +35,10 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
                 assert v.is_contiguous()
                 assert w.is_contiguous()
                 assert u.is_contiguous()
+                assert s.is_contiguous()
                 ctx.save_for_backward(r, k, v, w, u)
                 y = torch.empty((B, T, C), device=r.device, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
-                wkv6_cuda.forward(B, T, C, H, r, k, v, w, u, y)
+                wkv6_cuda.forward(B, T, C, H, r, k, v, w, u, s, y)
                 return y
 
         @staticmethod
@@ -54,16 +56,17 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
                 gv = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
                 gw = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
                 gu = torch.empty((B, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
+                #gs = torch.empty((B, H, C//H, C//H), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
                 wkv6_cuda.backward(B, T, C, H, r, k, v, w, u, gy, gr, gk, gv, gw, gu)
                 gu = torch.sum(gu, 0).view(H, C//H)
-                return (None, None, None, None, gr, gk, gv, gw, gu)
+                return (None, None, None, None, gr, gk, gv, gw, gu, None)
 
     @TCompileDisable 
     @torch.jit.ignore
-    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u):
-        return WKV_6.apply(B, T, C, H, r, k, v, w, u)
+    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u, s):
+        return WKV_6.apply(B, T, C, H, r, k, v, w, u, s)
 else:
     @TCompileDisable 
     @torch.jit.ignore
-    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u):
+    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u, s):
         return None    

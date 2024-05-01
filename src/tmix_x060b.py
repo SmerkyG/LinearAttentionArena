@@ -3,6 +3,8 @@ from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
+from .tmix import TimeMixState
+
 class RWKV_Tmix_x060b(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
@@ -52,38 +54,32 @@ class RWKV_Tmix_x060b(MyModule):
         self.ln_x = nn.LayerNorm(args.dim_att)
 
     @MyFunction
-    def jit_func(self, x):
+    def forward(self, x, last_state:TimeMixState):
         B, T, C = x.size()
+        H = self.n_head
 
-        xx = self.time_shift(x) - x
+        shift_state = x[:, -1].clone()
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
-        xxx = x + xx * self.time_maa_x
+        xxx = x + dxprev * self.time_maa_x
         xxx = torch.tanh(xxx @ self.time_maa_rkvw_w1).view(B*T, 4, -1).transpose(0, 1)
         xxx = torch.bmm(xxx, self.time_maa_rkvw_w2).view(4, B, T, C)
 
         r, k, v, w = xxx.unbind(dim=0)
-        r = x + xx * (self.time_maa_r + r)
-        k = x + xx * (self.time_maa_k + k)
-        v = x + xx * (self.time_maa_v + v)
-        w = x + xx * (self.time_maa_w + w)
+        r = x + dxprev * (self.time_maa_r + r)
+        k = x + dxprev * (self.time_maa_k + k)
+        v = x + dxprev * (self.time_maa_v + v)
+        w = x + dxprev * (self.time_maa_w + w)
         
         r = self.receptance(r)
         k = self.key(k)
         v = self.value(v)
         w = self.time_decay + torch.tanh(w @ self.time_decay_w1) @ self.time_decay_w2
-        return r, k, v, w
+        u = self.time_faaaa
 
-    @MyFunction
-    def jit_func_2(self, x):
+        wkv_state = last_state.wkv_state.clone()
+        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
+
         x = self.ln_x(x)
         x = self.output(x)
-        return x
-
-    def forward(self, x):
-        B, T, C = x.size()
-        H = self.n_head
-
-        r, k, v, w = self.jit_func(x)
-        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u=self.time_faaaa)
-
-        return self.jit_func_2(x)
+        return x, TimeMixState(wkv_state, shift_state)
