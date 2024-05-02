@@ -4,6 +4,7 @@
 
 import os, math, gc, importlib
 import torch
+import torch.utils.checkpoint
 # torch._C._jit_set_profiling_executor(True)
 # torch._C._jit_set_profiling_mode(True)
 import torch.nn as nn
@@ -18,6 +19,7 @@ from .tmix_x060c import RWKV_Tmix_x060c
 from .tmix_x060f import RWKV_Tmix_x060f
 from .tmix_x060g import RWKV_Tmix_x060g
 from .tmix_x060o import RWKV_Tmix_x060o
+from .tmix_taylor import RWKV_Tmix_taylor
 
 from .cmix_x052 import RWKV_CMix_x052
 from .cmix_x060 import RWKV_CMix_x060
@@ -68,7 +70,15 @@ class Block(nn.Module):
         self.parallel = False
 
         mt = os.environ["RWKV_MODEL_TYPE"]
-        if 'x060b' in mt:
+        if 'x060taylor' in mt:
+            if layer_id < args.n_layer // 3:
+                self.att = RWKV_Tmix_taylor(args, layer_id)
+            else:
+                self.att = RWKV_Tmix_x060b(args, layer_id)
+            self.ffn = RWKV_CMix_x060(args, layer_id)
+            if 'x060bp' in mt:
+                self.parallel = True
+        elif 'x060b' in mt:
             self.att = RWKV_Tmix_x060b(args, layer_id)
             self.ffn = RWKV_CMix_x060(args, layer_id)
             if 'x060bp' in mt:
@@ -264,8 +274,11 @@ class RWKV(pl.LightningModule):
 
         x = self.drop0(x)
         for block in self.blocks:
-            if args.grad_cp == 1:
-                x = deepspeed.checkpointing.checkpoint(block, x)
+            if self.training and args.grad_cp == 1:
+                if 'deepspeed' in args.strategy:
+                    x = deepspeed.checkpointing.checkpoint(block, x)
+                else:
+                    x = torch.utils.checkpoint.checkpoint(block, x, use_reentrant=False)
             else:
                 x = block(x)
 
