@@ -12,8 +12,15 @@ from torch.utils.cpp_extension import load
 HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
 
 if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
+    extra_cuda_cflags = ["-O3", f"-D_N_={HEAD_SIZE}", f"-D_T_={int(os.environ['RWKV_CTXLEN'])}"]
+    if torch.cuda.is_available():
+        if torch.version.hip:
+            extra_cuda_cflags += ["--save-temps"]
+        else:
+            extra_cuda_cflags += ["-res-usage", "--use_fast_math", "-Xptxas -O3", "--extra-device-vectorization"]
+
     wkv6_cuda = load(name="wkv6", sources=["cuda/wkv6_op.cpp", f"cuda/wkv6_cuda.cu"],
-                    verbose=True, extra_cuda_cflags=["-res-usage", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}", f"-D_T_={int(os.environ['RWKV_CTXLEN'])}"])
+                    verbose=True, extra_cuda_cflags=extra_cuda_cflags)
         
     class WKV_6(torch.autograd.Function):
         @staticmethod
@@ -49,6 +56,8 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
                 T = ctx.T
                 C = ctx.C
                 H = ctx.H
+                if not gy.is_contiguous():
+                    gy = gy.contiguous()
                 assert gy.is_contiguous()
                 r, k, v, w, u = ctx.saved_tensors
                 gr = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)

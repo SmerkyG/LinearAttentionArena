@@ -1,11 +1,12 @@
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
 from .tmix import TimeMixState
 
-class RWKV_Tmix_x060b(MyModule):
+class RWKV_Tmix_x060(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -27,9 +28,10 @@ class RWKV_Tmix_x060b(MyModule):
             self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
             self.time_maa_w = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
+            self.time_maa_g = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
             D_MIX_LORA = 32
-            self.time_maa_rkvw_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*4))
-            self.time_maa_rkvw_w2 = nn.Parameter(torch.zeros(4, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
+            self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*5))
+            self.time_maa_w2 = nn.Parameter(torch.zeros(5, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
             decay_speed = torch.ones(args.dim_att)
             for n in range(args.dim_att):
@@ -49,8 +51,9 @@ class RWKV_Tmix_x060b(MyModule):
         self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
 
         self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
-        self.ln_x = nn.LayerNorm(args.dim_att)
+        self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
 
     @MyFunction
     def forward(self, x, last_state:TimeMixState):
@@ -61,24 +64,28 @@ class RWKV_Tmix_x060b(MyModule):
         dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
-        xxx = torch.tanh(xxx @ self.time_maa_rkvw_w1).view(B*T, 4, -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_rkvw_w2).view(4, B, T, C)
+        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_w2).view(5, B, T, C)
 
-        mr, mk, mv, mw = xxx.unbind(dim=0)
+        mr, mk, mv, mw, mg = xxx.unbind(dim=0)
         xr = x + dxprev * (self.time_maa_r + mr)
         xk = x + dxprev * (self.time_maa_k + mk)
         xv = x + dxprev * (self.time_maa_v + mv)
         xw = x + dxprev * (self.time_maa_w + mw)
+        xg = x + dxprev * (self.time_maa_g + mg)
         
         r = self.receptance(xr)
         k = self.key(xk)
         v = self.value(xv)
+        g = F.silu(self.gate(xg))
+        
         w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
         u = self.time_faaaa
 
         wkv_state = last_state.wkv_state.clone()
         x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
+        x = x.view(B * T, C)
 
-        x = self.ln_x(x)
-        x = self.output(x)
+        x = self.ln_x(x).view(B, T, C)
+        x = self.output(x * g)
         return x, TimeMixState(wkv_state, shift_state)

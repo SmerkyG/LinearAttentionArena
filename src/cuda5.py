@@ -12,8 +12,15 @@ from torch.utils.cpp_extension import load
 HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
 
 if 'x052' in os.environ["RWKV_MODEL_TYPE"]:
+    extra_cuda_cflags = ["-O3", f"-D_N_={HEAD_SIZE}"]
+    if torch.cuda.is_available():
+        if torch.version.hip:
+            extra_cuda_cflags += ["--save-temps"]
+        else:
+            extra_cuda_cflags += ["-res-usage", "--use_fast_math", "-Xptxas -O3", "--extra-device-vectorization"]
+
     wkv5_cuda = load(name="wkv5", sources=["cuda/wkv5_op.cpp", f"cuda/wkv5_cuda.cu"],
-                    verbose=True, extra_cuda_cflags=["-res-usage", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}"])
+                    verbose=True, extra_cuda_cflags=extra_cuda_cflags)
         
     class WKV_5(torch.autograd.Function):
         @staticmethod
