@@ -3,8 +3,6 @@ from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
-
 class RWKV_Tmix_x060o3(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
