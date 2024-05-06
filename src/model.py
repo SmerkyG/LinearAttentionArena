@@ -366,8 +366,9 @@ class RWKV(pl.LightningModule):
         )
         m = {}
         n_params = 0
-        for n in self.state_dict():
-            p = self.state_dict()[n]
+        state_dict = self.state_dict()
+        for n in state_dict:
+            p = state_dict[n]
             shape = p.shape
 
             s0 = str(shape[0]) if len(shape) > 0 else ""
