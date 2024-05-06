@@ -24,10 +24,10 @@ class RWKV_Tmix_x060o3(MyModule):
             self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
             self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
-            self.time_maa_w = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
+            #self.time_maa_w = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             D_MIX_LORA = 32
-            self.time_maa_rkvw_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*4))
-            self.time_maa_rkvw_w2 = nn.Parameter(torch.zeros(4, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
+            self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*3))
+            self.time_maa_w2 = nn.Parameter(torch.zeros(3, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
             decay_speed = torch.ones(args.dim_att)
             for n in range(args.dim_att):
@@ -63,18 +63,18 @@ class RWKV_Tmix_x060o3(MyModule):
 
         xxx = x + dxprev * self.time_maa_x
 
-        xxx = torch.tanh(xxx @ self.time_maa_rkvw_w1).view(B*T, 4, -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_rkvw_w2).view(4, B, T, C)
+        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 3, -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_w2).view(3, B, T, C)
 
-        r, k, v, w = xxx.unbind(dim=0)
-        r = x + dxprev * (self.time_maa_r + r)
-        k = x + dxprev * (self.time_maa_k + k)
-        v = x + dxprev * (self.time_maa_v + v)
-        w = x + dxprev * (self.time_maa_w + w)
+        mr, mk, mv, mw = xxx.unbind(dim=0)
+        xr = x + dxprev * (self.time_maa_r + mr)
+        xk = x + dxprev * (self.time_maa_k + mk)
+        xv = x + dxprev * (self.time_maa_v + mv)
+        #xw = x + dxprev * (self.time_maa_w + mw)
         
-        r = self.receptance(r)
-        k = self.key(k)
-        v = self.value(v)
+        r = self.receptance(xr)
+        k = self.key(xk)
+        v = self.value(xv)
         w = self.time_decay + k
         tau = 9
         # w in log-log space, securely clamped
