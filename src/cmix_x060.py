@@ -28,7 +28,7 @@ class RWKV_CMix_x060(MyModule):
         xr = x + xx * self.time_maa_r
 
         k = self.key(xk)
-        k = (1 + torch.nn.functional.elu(k)) ** 2
+        k = torch.relu(k) ** 2
         kv = self.value(k)
         return torch.sigmoid(self.receptance(xr)) * kv
     
