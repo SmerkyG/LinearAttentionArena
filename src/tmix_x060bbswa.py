@@ -118,7 +118,7 @@ class RWKV_Tmix_x060bbswa(MyModule):
             x = x[:,:,-T:].transpose(1,2).reshape(B,T,C) # FIXME - inefficient to recalc extra blocks each time, but this is just a proof of concept
             if b >= T:
                 # if there's at least one whole block prior to b, apply it to the output via linear attention, and update the linear attention state
-                r, k, v, w = lr[:,b-T:b], lk[:,b-T:b], lv[:,b-T:b], lw[:,b-T:b]
+                r, k, v, w = lr[:,e-T:e], lk[:,b-T:b], lv[:,b-T:b], lw[:,b-T:b]
                 wkv_state = wkv_state.clone()
                 x = x + RUN_CUDA_RWKV6(B, T, C, H, r.contiguous(), k.contiguous(), v.contiguous(), w.contiguous(), u, wkv_state)
             blocks.append(x)
