@@ -14,11 +14,9 @@ from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 from lightning.pytorch.strategies import DeepSpeedStrategy
 
 from .tmix_x052 import RWKV_Tmix_x052
+from .tmix_x060 import RWKV_Tmix_x060
 from .tmix_x060b import RWKV_Tmix_x060b
-from .tmix_x060c import RWKV_Tmix_x060c
-from .tmix_x060f import RWKV_Tmix_x060f
-from .tmix_x060g import RWKV_Tmix_x060g
-from .tmix_x060o import RWKV_Tmix_x060o
+from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
 
 from .cmix_x052 import RWKV_CMix_x052
@@ -69,48 +67,40 @@ class Block(nn.Module):
 
         self.parallel = False
 
+        ffnFactory = lambda: RWKV_CMix_x060(args, layer_id)
+
         mt = os.environ["RWKV_MODEL_TYPE"]
-        if 'x060taylor' in mt:
-            if layer_id < args.n_layer // 3:
-                self.att = RWKV_Tmix_taylor(args, layer_id)
-            else:
-                self.att = RWKV_Tmix_x060b(args, layer_id)
-            self.ffn = RWKV_CMix_x060(args, layer_id)
-            if 'x060bp' in mt:
-                self.parallel = True
-        elif 'x060b' in mt:
-            self.att = RWKV_Tmix_x060b(args, layer_id)
-            self.ffn = RWKV_CMix_x060(args, layer_id)
-            if 'x060bp' in mt:
-                self.parallel = True
-        elif 'x060c' in mt:
-            self.att = RWKV_Tmix_x060c(args, layer_id)
-            self.ffn = RWKV_CMix_x060(args, layer_id)
-            if 'x060cp' in mt:
-                self.parallel = True
-        elif 'x060o' in mt:
-            self.att = RWKV_Tmix_x060o(args, layer_id)
-            self.ffn = RWKV_CMix_x060(args, layer_id)
-            if 'x060op' in mt:
-                self.parallel = True
-        elif 'x060f' in mt:
-            self.att = RWKV_Tmix_x060f(args, layer_id)
-            self.ln2 = None
-            self.ffn = None
-        elif 'x060g' in mt:
-            self.att = RWKV_Tmix_x060g(args, layer_id)
-            self.ln2 = None
-            self.ffn = None
+        if 'parallel' in mt:
+            self.parallel = True
+
+        if 'x060b' in mt:
+            attFactory = lambda: RWKV_Tmix_x060b(args, layer_id)
+        elif 'x060o3' in mt:
+            attFactory = lambda: RWKV_Tmix_x060o3(args, layer_id)
         elif 'x052' in mt:
-            self.att = RWKV_Tmix_x052(args, layer_id)
-            self.ffn = RWKV_CMix_x052(args, layer_id)
+            attFactory = lambda: RWKV_Tmix_x052(args, layer_id)
+            ffnFactory = lambda: RWKV_CMix_x052(args, layer_id)
+        elif 'x060' in mt:
+            attFactory = lambda: RWKV_Tmix_x060(args, layer_id)
         elif 'mamba' in mt:
-            self.att = Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
-            self.ffn = Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
+            attFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
+            ffnFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
         else:
             print(f"Unsupported model type: {mt}")
             exit(0)
         
+        if 'taylor' in mt:
+            if layer_id >= args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
+                attFactory = lambda: RWKV_Tmix_taylor(args, layer_id)
+
+        self.att = attFactory()
+        if ffnFactory is None:
+            self.ln2 = None
+            self.ffn = None
+        else:
+            self.ffn = ffnFactory()
+
+
         if args.dropout > 0:
             self.drop0 = nn.Dropout(p = args.dropout)
             self.drop1 = nn.Dropout(p = args.dropout)
@@ -249,13 +239,9 @@ class RWKV(pl.LightningModule):
 
         if args.weight_decay > 0:
             optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": args.weight_decay, "my_lr_scale": 1.0}]
-            if self.deepspeed_offload:
-                return DeepSpeedCPUAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adamw_mode=True, amsgrad=False)
-            return FusedAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adam_w_mode=True, amsgrad=False)
-        else:
-            if self.deepspeed_offload:
-                return DeepSpeedCPUAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adamw_mode=False, weight_decay=0, amsgrad=False)
-            return FusedAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adam_w_mode=False, weight_decay=0, amsgrad=False)
+        if self.deepspeed_offload:
+            return DeepSpeedCPUAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adamw_mode=True, amsgrad=False)
+        return FusedAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adam_w_mode=True, amsgrad=False)
 
     @property
     def deepspeed_offload(self) -> bool:
