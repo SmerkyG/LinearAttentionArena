@@ -185,12 +185,12 @@ if __name__ == "__main__":
     if args.lr_final == 0 or args.lr_init == 0:
         rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
 
-    assert args.precision in ["fp32", "tf32", "fp16", "bf16", "bf16-true", "bf16-mixed"]
+    assert args.precision in ["32", "tf32", "16", "16-true", "16-mixed", "bf16", "bf16-true", "bf16-mixed"]
     os.environ["RWKV_FLOAT_MODE"] = args.precision
-    if args.precision == "fp32":
+    if str(args.precision) == "32":
         for i in range(10):
             rank_zero_info("\n\nNote: you are using fp32 (very slow). Try bf16 / tf32 for faster training.\n\n")
-    if args.precision == "fp16":
+    if str(args.precision).startswith("16"):
         rank_zero_info("\n\nNote: you are using fp16 (might overflow). Try bf16 / tf32 for stable training.\n\n")
 
     if "deepspeed_stage_3" in args.strategy:
@@ -198,19 +198,12 @@ if __name__ == "__main__":
 
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    if args.precision == "fp32":
+    if str(args.precision) == "32":
         torch.backends.cudnn.allow_tf32 = False
         torch.backends.cuda.matmul.allow_tf32 = False
     else:
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_tf32 = True
-
-    # if "32" in args.precision:
-    #     args.precision = 32
-    # elif args.precision == "fp16":
-    #     args.precision = 16
-    # else:
-    #     args.precision = "bf16"
 
     ########################################################################################################
 
