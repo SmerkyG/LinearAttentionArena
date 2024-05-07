@@ -21,6 +21,7 @@ from .tmix_x060bbswa import RWKV_Tmix_x060bbswa
 from .tmix_x060b import RWKV_Tmix_x060b
 from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
+from .tmix_attn import RWKV_Tmix_attn
 
 from .cmix_x052 import RWKV_CMix_x052
 from .cmix_x060 import RWKV_CMix_x060
@@ -83,18 +84,20 @@ class Block(nn.Module):
         if 'parallel' in mt:
             self.parallel = True
 
-        if 'x060bbswa' in mt:
+        if mt.startswith('x060bbswa'):
             attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id)
-        elif 'x060b' in mt:
+        elif mt.startswith('x060b'):
             attFactory = lambda: RWKV_Tmix_x060b(args, layer_id)
-        elif 'x060o3' in mt:
+        elif mt.startswith('x060o3'):
             attFactory = lambda: RWKV_Tmix_x060o3(args, layer_id)
-        elif 'x052' in mt:
+        elif mt.startswith('x052'):
             attFactory = lambda: RWKV_Tmix_x052(args, layer_id)
             ffnFactory = lambda: RWKV_CMix_x052(args, layer_id)
-        elif 'x060' in mt:
+        elif mt.startswith('x060'):
             attFactory = lambda: RWKV_Tmix_x060(args, layer_id)
-        elif 'mamba' in mt:
+        elif mt.startswith('attn'):
+            attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
+        elif mt.startswith('mamba'):
             attFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
             ffnFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
         else:
@@ -423,7 +426,7 @@ class RWKV(pl.LightningModule):
 
             scale = 1.0
             if len(p.shape) > 2 or "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
-                if 'ln_x.weight' in n:
+                if 'ln_x' in n and n.endswith('.weight'):
                     layer_scale = (1+int(n.split('.')[1])) / self.args.n_layer
                     m[n] = (p * 0.0) + (layer_scale ** 0.7)
                 else:

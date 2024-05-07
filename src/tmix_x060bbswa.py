@@ -1,5 +1,6 @@
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
@@ -72,7 +73,12 @@ class RWKV_Tmix_x060bbswa(MyModule):
 
         self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        self.ln_r = nn.LayerNorm(args.dim_att)
+        self.ln_k = nn.LayerNorm(args.dim_att)
+        #self.ln_v = nn.LayerNorm(args.dim_att)
         self.ln_x = nn.LayerNorm(args.dim_att)
+        self.ln_x2 = nn.LayerNorm(args.dim_att)
+        self.ln_x3 = nn.LayerNorm(args.dim_att)
 
         self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
@@ -97,12 +103,15 @@ class RWKV_Tmix_x060bbswa(MyModule):
         xv = x + dxprev * (self.time_maa_v + mv)
         xw = x + dxprev * (self.time_maa_w + mw)
         
-        lr = self.receptance(xr)
-        lk = self.key(xk)
-        lv = self.value(xv)
-        lw = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
-
+        r = self.receptance(xr)
+        k = self.key(xk)
+        v = self.value(xv)
+        w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
         u = self.time_faaaa
+
+        lr = self.ln_r(r)
+        lk = self.ln_k(k)
+        lv = v #self.ln_v(v)
 
         L = T
         T = 64
@@ -113,18 +122,30 @@ class RWKV_Tmix_x060bbswa(MyModule):
         for e in range(T, L+1, T): # end of latest block
             b = max(0, e-T*(Z+1)) # beginning of earliest block
             # FIXME - maybe support dropout
-            r, k, v, w = lr[:,b:e].view(B,-1,H,K).transpose(1,2), lk[:,b:e].view(B,-1,H,K).transpose(1,2), lv[:,b:e].view(B,-1,H,V).transpose(1,2), lw[:,b:e].view(B,-1,H,K).transpose(1,2)
-            x = nn.functional.scaled_dot_product_attention(r, k, v, attn_mask=self.bias_mask(r), dropout_p=0.0, is_causal=self.bias_mask is None)
-            x = x[:,:,-T:].transpose(1,2).reshape(B,T,C) # FIXME - inefficient to recalc extra blocks each time, but this is just a proof of concept
-            if b >= T:
-                # if there's at least one whole block prior to b, apply it to the output via linear attention, and update the linear attention state
-                r, k, v, w = lr[:,e-T:e], lk[:,b-T:b], lv[:,b-T:b], lw[:,b-T:b]
-                wkv_state = wkv_state.clone()
-                x = x + RUN_CUDA_RWKV6(B, T, C, H, r.contiguous(), k.contiguous(), v.contiguous(), w.contiguous(), u, wkv_state)
-            blocks.append(x)
-        x = torch.cat(blocks, dim=-2)
+            y = nn.functional.scaled_dot_product_attention(
+                lr[:,b:e].view(B,-1,H,K).transpose(1,2),
+                lk[:,b:e].view(B,-1,H,K).transpose(1,2),
+                lv[:,b:e].view(B,-1,H,V).transpose(1,2),
+                attn_mask=self.bias_mask(r[:,b:e]), dropout_p=0.0, is_causal=self.bias_mask is None)
+            y = y[:,:,-T:].transpose(1,2).reshape(B,T,C) # FIXME - inefficient to recalc extra blocks each time, but this is just a proof of concept
+            # if b >= T:
+            # if there's at least one whole block prior to b, apply it to the output via linear attention, and update the linear attention state
+            # r, k, v, w = lr[:,e-T:e], lk[:,b-T:b], lv[:,b-T:b], lw[:,b-T:b]
+            # wkv_state = wkv_state.clone()
+            # x = x + RUN_CUDA_RWKV6(B, T, C, H, r.contiguous(), k.contiguous(), v.contiguous(), w.contiguous(), u, wkv_state)
+            blocks.append(y)
+        y = torch.cat(blocks, dim=-2)
+
+        #r, k, v = self.receptance(x[:,T*Z:]), self.key(x[:,:-T*Z]), self.value(x[:,:-T*Z])
+        w = self.time_decay + k
+        tau = 9
+        # w in log-log space, securely clamped
+        w = -nn.functional.elu(-w+tau)+tau
+        k = (1 - ( (-w.exp()).exp() )).to(r)
+        wkv_state = wkv_state.clone()
+        x = RUN_CUDA_RWKV6(B, L, C, H, r.contiguous(), k.contiguous(), v.contiguous(), w.contiguous(), torch.zeros_like(u), wkv_state)
         
-        x = self.ln_x(x)
+        x = self.ln_x3(self.ln_x(x) + self.ln_x2(y))
         x = self.output(x)
         return x, TimeMixState(wkv_state, shift_state)
 
