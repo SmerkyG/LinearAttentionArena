@@ -32,6 +32,7 @@ class RWKV_Tmix_x060bbswa(MyModule):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
+        self.n_layer = args.n_layer
 
         self.k_head_size = self.v_head_size = self.head_size = args.head_size_a
         self.n_kv_head = self.n_head = args.dim_att // self.head_size
@@ -119,24 +120,28 @@ class RWKV_Tmix_x060bbswa(MyModule):
         blocks = []
         #wkv_state = last_state.wkv_state.clone()
         wkv_state = last_state.wkv_state.to(torch.bfloat16).contiguous()
-        for e in range(T, L+1, T): # end of latest block
-            b = max(0, e-T*(Z+1)) # beginning of earliest block
-            # FIXME - maybe support dropout
-            y = nn.functional.scaled_dot_product_attention(
-                lr[:,b:e].view(B,-1,H,K).transpose(1,2),
-                lk[:,b:e].view(B,-1,H,K).transpose(1,2),
-                lv[:,b:e].view(B,-1,H,V).transpose(1,2),
-                attn_mask=self.bias_mask(r[:,b:e]), dropout_p=0.0, is_causal=self.bias_mask is None)
-            y = y[:,:,-T:].transpose(1,2).reshape(B,T,C) # FIXME - inefficient to recalc extra blocks each time, but this is just a proof of concept
-            # if b >= T:
-            # if there's at least one whole block prior to b, apply it to the output via linear attention, and update the linear attention state
-            # r, k, v, w = lr[:,e-T:e], lk[:,b-T:b], lv[:,b-T:b], lw[:,b-T:b]
-            # wkv_state = wkv_state.clone()
-            # x = x + RUN_CUDA_RWKV6(B, T, C, H, r.contiguous(), k.contiguous(), v.contiguous(), w.contiguous(), u, wkv_state)
-            blocks.append(y)
-        y = torch.cat(blocks, dim=-2)
+        if self.layer_id == 0:
+            y = torch.zeros_like(x)
+        else:
+            for e in range(T, L+1, T): # end of latest block
+                b = max(0, e-T*(Z+1)) # beginning of earliest block
+                # FIXME - maybe support dropout
+                bias_mask = self.bias_mask(r[:,b:e]) if self.layer_id == 0 else None
+                y = nn.functional.scaled_dot_product_attention(
+                    lr[:,b:e].view(B,-1,H,K).transpose(1,2),
+                    lk[:,b:e].view(B,-1,H,K).transpose(1,2),
+                    lv[:,b:e].view(B,-1,H,V).transpose(1,2),
+                    attn_mask=bias_mask, dropout_p=0.0, is_causal=bias_mask is None)
+                y = y[:,:,-T:].transpose(1,2).reshape(B,T,C) # FIXME - inefficient to recalc extra blocks each time, but this is just a proof of concept
+                # if b >= T:
+                # if there's at least one whole block prior to b, apply it to the output via linear attention, and update the linear attention state
+                # r, k, v, w = lr[:,e-T:e], lk[:,b-T:b], lv[:,b-T:b], lw[:,b-T:b]
+                # wkv_state = wkv_state.clone()
+                # x = x + RUN_CUDA_RWKV6(B, T, C, H, r.contiguous(), k.contiguous(), v.contiguous(), w.contiguous(), u, wkv_state)
+                blocks.append(y)
+            y = torch.cat(blocks, dim=-2)
 
-        #r, k, v = self.receptance(x[:,T*Z:]), self.key(x[:,:-T*Z]), self.value(x[:,:-T*Z])
+        #r, k, v = lr, lk, lv #self.receptance(x), self.key(x), self.value(x)
         w = self.time_decay + k
         tau = 9
         # w in log-log space, securely clamped
@@ -144,6 +149,8 @@ class RWKV_Tmix_x060bbswa(MyModule):
         k = (1 - ( (-w.exp()).exp() )).to(r)
         wkv_state = wkv_state.clone()
         x = RUN_CUDA_RWKV6(B, L, C, H, r.contiguous(), k.contiguous(), v.contiguous(), w.contiguous(), torch.zeros_like(u), wkv_state)
+        #x = RUN_CUDA_RWKV6(B, L-T*Z, C, H, r[:,T*Z:].contiguous(), k[:,:-T*Z].contiguous(), v[:,:-T*Z].contiguous(), w[:,:-T*Z].contiguous(), torch.zeros_like(u), wkv_state)
+        #x = F.pad(x, (0, 0, T*Z, 0))
         
         x = self.ln_x3(self.ln_x(x) + self.ln_x2(y))
         x = self.output(x)
