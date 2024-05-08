@@ -45,8 +45,6 @@ class RWKV_Tmix_x060o3(MyModule):
             self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
             self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
 
-        self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
-
         self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
@@ -63,15 +61,21 @@ class RWKV_Tmix_x060o3(MyModule):
 
         xxx = x + dxprev * self.time_maa_x
 
-        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 3, -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_w2).view(3, B, T, C)
+        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, self.time_maa_w2.size(0), -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_w2).view(self.time_maa_w2.size(0), B, T, C)
 
-        mr, mk, mv, mw = xxx.unbind(dim=0)
+        mr, mk, mv = xxx.unbind(dim=0)
         xr = x + dxprev * (self.time_maa_r + mr)
         xk = x + dxprev * (self.time_maa_k + mk)
         xv = x + dxprev * (self.time_maa_v + mv)
         #xw = x + dxprev * (self.time_maa_w + mw)
         
+        # r = self.receptance(xr)
+        # k = torch.tanh(self.key(xk))
+        # v = self.value(xv)
+        # w = 1.0 - k.abs().float().clamp(0.0001, 0.9999)
+        # w = torch.log(-torch.log(w)).to(r.dtype)
+
         r = self.receptance(xr)
         k = self.key(xk)
         v = self.value(xv)
@@ -83,11 +87,8 @@ class RWKV_Tmix_x060o3(MyModule):
 
         u = self.time_faaaa
 
-        #wkv_state = last_state.wkv_state.to(torch.bfloat16)#.clone()
-        wkv_state = last_state.wkv_state.to(torch.bfloat16)
-        x = RUN_CUDA_RWKV6(B, T, C, H, r.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16), w.to(torch.bfloat16), u.to(torch.bfloat16), wkv_state)
-        #wkv_state = last_state.wkv_state.to(torch.bfloat16)
-        #x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
+        wkv_state = last_state.wkv_state.clone()
+        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
 
         #x, s = fused_recurrent_rwkv6hypno2(r, k, v, w, u, z, initial_state=torch.zeros([0], dtype=r.dtype, device=r.device), scale=-1, output_final_state=False, causal=True)
         #x = x.transpose(1,2).reshape(B,T,C)
