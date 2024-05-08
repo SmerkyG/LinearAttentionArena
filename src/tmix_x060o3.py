@@ -70,12 +70,6 @@ class RWKV_Tmix_x060o3(MyModule):
         xv = x + dxprev * (self.time_maa_v + mv)
         #xw = x + dxprev * (self.time_maa_w + mw)
         
-        # r = self.receptance(xr)
-        # k = torch.tanh(self.key(xk))
-        # v = self.value(xv)
-        # w = 1.0 - k.abs().float().clamp(0.0001, 0.9999)
-        # w = torch.log(-torch.log(w)).to(r.dtype)
-
         r = self.receptance(xr)
         k = self.key(xk)
         v = self.value(xv)
