@@ -19,6 +19,7 @@ from .tmix_x052 import RWKV_Tmix_x052
 from .tmix_x060 import RWKV_Tmix_x060
 from .tmix_x060bbswa import RWKV_Tmix_x060bbswa
 from .tmix_x060b import RWKV_Tmix_x060b
+from .tmix_x060b5 import RWKV_Tmix_x060b5
 from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
 from .tmix_attn import RWKV_Tmix_attn
@@ -86,6 +87,8 @@ class Block(nn.Module):
 
         if mt.startswith('x060bbswa'):
             attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id)
+        elif mt.startswith('x060b5'):
+            attFactory = lambda: RWKV_Tmix_x060b5(args, layer_id)
         elif mt.startswith('x060b'):
             attFactory = lambda: RWKV_Tmix_x060b(args, layer_id)
         elif mt.startswith('x060o3'):
@@ -171,10 +174,6 @@ class RWKV(pl.LightningModule):
         self.metrics = dict(loss=metrics.Loss(), acc=metrics.Accuracy())
 
         self.args = args
-        if not hasattr(args, 'dim_att'):
-            args.dim_att = args.n_embd
-        if not hasattr(args, 'dim_ffn'):
-            args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32) # default = 3.5x emb size
         assert args.n_embd % 32 == 0
         assert args.dim_att % 32 == 0
         assert args.dim_ffn % 32 == 0
@@ -287,8 +286,8 @@ class RWKV(pl.LightningModule):
             last_block_states = [
                 BlockState(
                     TimeMixState(
-                        torch.zeros([B, args.n_embd//args.head_size_a, args.head_size_a, args.head_size_a], dtype=dtype, device=idx.device, requires_grad=requires_grad), 
-                        torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                        torch.zeros([B, args.dim_att//args.head_size_a, args.head_size_a, args.head_size_a], dtype=dtype, device=idx.device, requires_grad=requires_grad), 
+                        torch.zeros([B, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                     ), 
                     ChannelMixState(
                         torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)

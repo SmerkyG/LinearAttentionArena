@@ -105,7 +105,7 @@ if __name__ == "__main__":
     os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
     if args.dim_att <= 0:
-        args.dim_att = args.n_embd
+        args.dim_att = args.n_embd * 2
     if args.dim_ffn <= 0:
         args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32)  # default = 3.5x emb size
 
