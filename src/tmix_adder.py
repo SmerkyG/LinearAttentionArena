@@ -5,6 +5,8 @@ from .CoreDependencies import *
 
 from .tmix import TimeMixState
 
+import math
+
 class RWKV_Tmix_adder(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
@@ -16,7 +18,7 @@ class RWKV_Tmix_adder(MyModule):
         assert args.dim_att % self.n_head == 0
 
         self.dim_v = args.dim_att
-        self.dim_k = 16 * self.n_head
+        self.dim_k = args.dim_att
 
         with torch.no_grad():
             ratio_0_to_1 = layer_id / (args.n_layer - 1)  # 0 to 1
@@ -94,8 +96,10 @@ class RWKV_Tmix_adder(MyModule):
         k = self.key(xk)
         v = self.value(xv)
         v_first = self.value(xv_first) + torch.tanh(xw @ self.time_value2_w1) @ self.time_value2_w2
-        #w_log = -torch.exp((self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2).clamp(None,2))
+        #w_log = -torch.exp(self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2)
         #w_log = w_log.clamp(-5, 0)
+        #w_log = w_log.clamp(math.log(0.005))
+        #w = w_log.exp()
         w = 0.005 + 0.995 * F.sigmoid(self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2)
         k = (k * (1 - w)).to(k.dtype)
         w_log = w.log()
