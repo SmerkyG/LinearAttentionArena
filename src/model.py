@@ -23,6 +23,7 @@ from .tmix_x060b2 import RWKV_Tmix_x060b2
 from .tmix_x060b5 import RWKV_Tmix_x060b5
 from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
+from .tmix_taylorchunked import RWKV_Tmix_taylorchunked
 from .tmix_attn import RWKV_Tmix_attn
 
 from .cmix_x052 import RWKV_CMix_x052
@@ -112,7 +113,10 @@ class Block(nn.Module):
         
         if 'taylor' in mt:
             if layer_id >= args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
-                attFactory = lambda: RWKV_Tmix_taylor(args, layer_id)
+                if 'taylorchunked' in mt:
+                    attFactory = lambda: RWKV_Tmix_taylorchunked(args, layer_id)
+                else:
+                    attFactory = lambda: RWKV_Tmix_taylor(args, layer_id)
 
         self.att = attFactory()
         if ffnFactory is None:

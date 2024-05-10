@@ -69,7 +69,7 @@ DS_BUCKET_MB=2 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects
 #
 python train.py --load_model "0" --wandb "Linear_Attention_Arena" --proj_dir $PROJ_DIR --model_type $model_type \
  --ctx_len $ctx_len --train_stage 3 --epoch_count 999999 --epoch_begin 0 \
- --data_file "data/minipile" --validation_data_file "data/minipile_validation" --val_check_interval 400 --my_exit_tokens 1498226207 --magic_prime 2926181  \
+ --data_file "data/minipile" --validation_data_file "data/minipile_validation" --val_check_interval 100 --my_exit_tokens 1498226207 --magic_prime 731531  \
  --num_nodes $N_NODE --micro_bsz $m_bsz --n_layer $layer --n_embd $emb \
  --lr_init $lr_init --lr_final $lr_final --warmup_steps 10 --beta1 0.9 --beta2 0.99 --adam_eps 1e-8 --data_type "binidx" --vocab_size 65536 \
  --weight_decay 0.001 --epoch_save $save_period --head_size_a $head_size \

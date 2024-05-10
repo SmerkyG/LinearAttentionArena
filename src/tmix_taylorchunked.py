@@ -1,13 +1,12 @@
 import torch
 from torch import nn, Tensor
-import torch.nn.functional as F
 from .CoreDependencies import *
-
-from .tmix import TimeMixState
 
 import math
 
-class RWKV_Tmix_taylor(MyModule):
+from .tmix import TimeMixState
+
+class RWKV_Tmix_taylorchunked(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -51,6 +50,7 @@ class RWKV_Tmix_taylor(MyModule):
     def forward(self, x, last_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
+        Q = C // H
         K = C // H
         V = C // H
 
@@ -70,30 +70,64 @@ class RWKV_Tmix_taylor(MyModule):
         v = self.value(xv).view(B,T,H,V).transpose(1,2)
         w = self.decay(xv).view(B,T,H).transpose(1,2)
         #w = (-w.exp()).exp()
-        w = torch.sigmoid(2.0 + w)
+        w_log = -(w - 2).exp() # start at around 87%
+        w_log = w_log.clamp(math.log(0.005))
+        #w = torch.sigmoid(2.0 + w)
+        #w_log = (0.005 + 0.995 * w).log()
 
         # normalize each head
         q = self.ln_q(q)
         k = self.ln_k(k)
 
-        #w = w.clamp(0.005) # needed if we use fast reverse cumprod
-        #wcp = w.cumprod(-1) # w cumprod
-        #wrcp = w/wcp*wcp[...,-1:] # w reverse cumprod
+        # chunk
+        L = T
+        T = 16
+        N = L // T
+        assert T * N == L, 'context length must be an even multiple of chunk size'
+        q = q.view(B,H,N,T,Q)
+        k = k.view(B,H,N,T,K)
+        v = v.view(B,H,N,T,V)
+        #w = w.view(B,H,N,T)
+        w_log = w_log.view(B,H,N,T,1)
 
-        # causal w matrix by time offset with u=1
-        w = w.view(B,H,T,1).expand(B,H,T,T).masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).flip(-1).cumprod(-1).flip(-1).tril()
+        w_log_cumsum = w_log.cumsum(dim=-2).view(B,H,N,T,1)
+        w_chunk = w_log_cumsum[:,:,:,-1:,:].view(B,H,N,1,1) # decay across full chunk
+        w_inter = w_chunk - w_log_cumsum    # w1:4 = w0:4 - w0:1
+        w_intra = w_log_cumsum - w_log      # w1:3 = w0:3 - w0
 
+        #shifted_w_cumprod = F.pad(w_log_cumsum, (0, 0, 1, -1)).exp().view(B,H,N,T,K)
+        w_cumprod = w_log_cumsum.exp().view(B,H,N,T,1)
+        w_chunk = w_chunk.exp().to(k.dtype).view(B,H,N,1,1)
+        w_inter = w_inter.exp().to(k.dtype).view(B,H,N,T,1)
+        w_intra = w_intra.exp().to(k.dtype).view(B,H,N,T,1)
+
+        #w = w_intra.expand(B,H,N,T,T).masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).tril()
+
+        # intra-chunk and v_first
+        attn = ((q * w_cumprod) @ (k / w_cumprod).mT).to(k.dtype).tril(-1) # + torch.eye(T, T).expand(B, T, T)
         attn = q @ k.mT
         attn = 1 + attn + 0.5 * attn.square() # taylor series approximation to exp
-        attn = (attn * w).to(q.dtype)
-
+        #attn = (attn * w).to(q.dtype)
         # NOTE - we may eventually want denominator, a la rwkv4
         #attn = attn / attn.sum(-1, keepdim=True).clamp(eps)
-        x = attn @ v
-        x = x.transpose(1,2).reshape(B,T,C)
+        y = attn @ v + v
 
-        x = self.ln_x(x)
+        # inter-chunk        
+        wkv_state = last_state.wkv_state
+        wkv_states = []
+        wkv = ((k * w_inter).mT @ v).view(B,H,N,K,V)
+        wkv = list(wkv.unbind(dim=-3)) # N x BHKV
+        w_chunk = list(w_chunk.unbind(dim=-3))
+        for n in range(N):
+            wkv_states.append(wkv_state)
+            wkv_state = wkv_state * w_chunk[n].mT + wkv[n]
+        wkv_states = torch.stack(wkv_states, dim=2) # BHNKV       
+        y = y + (q * w_intra) @ wkv_states
 
-        x = self.output(x)
+        y = y.transpose(1,2).reshape(B,T,C)
 
-        return x, TimeMixState(last_state.wkv_state, shift_state)
+        y = self.ln_x(y)
+
+        y = self.output(y)
+
+        return y, TimeMixState(last_state.wkv_state, shift_state)
