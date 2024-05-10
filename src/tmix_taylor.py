@@ -15,7 +15,7 @@ class RWKV_Tmix_taylor(MyModule):
 
         self.n_layer = args.n_layer
 
-        self.head_size = args.head_size_a * 2
+        self.head_size = args.head_size_a
         self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
 
