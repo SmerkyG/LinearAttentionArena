@@ -23,18 +23,18 @@ class RWKV_Tmix_x060b2(MyModule):
                 ddd[0, 0, i] = i / args.n_embd
 
             self.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
-            self.time_maa_all = nn.Parameter(torch.cat([
-                1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0), # r
-                1.0 - torch.pow(ddd, ratio_1_to_almost0), # k
-                1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v
-                1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v2
-                1.0 - torch.pow(ddd, ratio_1_to_almost0), # w
-            ]))
-            # self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
-            # self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
-            # self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
-            # self.time_maa_w = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
-            # self.time_maa_v2 = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
+            # self.time_maa_all = nn.Parameter(torch.cat([
+            #     1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0), # r
+            #     1.0 - torch.pow(ddd, ratio_1_to_almost0), # k
+            #     1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v
+            #     1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v2
+            #     1.0 - torch.pow(ddd, ratio_1_to_almost0), # w
+            # ]))
+            self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
+            self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
+            self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
+            self.time_maa_w = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
+            self.time_maa_v2 = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
             D_MIX_LORA = 32
             self.time_maa_w2 = nn.Parameter(torch.zeros(5, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
             self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*self.time_maa_w2.size(0)))
@@ -75,13 +75,13 @@ class RWKV_Tmix_x060b2(MyModule):
         xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, self.time_maa_w2.size(0), -1).transpose(0, 1)
         xxx = torch.bmm(xxx, self.time_maa_w2).view(self.time_maa_w2.size(0), B, T, C)
 
-        xr, xk, xv, xv2, xw = (x + dxprev * (self.time_maa_all.view(5, 1, 1, C) + xxx)).unbind(dim=0)
-        # mr, mk, mv, mw, mv2 = xxx.unbind(dim=0)
-        # xr = x + dxprev * (self.time_maa_r + mr)
-        # xk = x + dxprev * (self.time_maa_k + mk)
-        # xv = x + dxprev * (self.time_maa_v + mv)
-        # xw = x + dxprev * (self.time_maa_w + mw)
-        # xv2 = x + dxprev * (self.time_maa_v2 + mv2)
+        # xr, xk, xv, xv2, xw = (x + dxprev * (self.time_maa_all.view(5, 1, 1, C) + xxx)).unbind(dim=0)
+        mr, mk, mv, mw, mv2 = xxx.unbind(dim=0)
+        xr = x + dxprev * (self.time_maa_r + mr)
+        xk = x + dxprev * (self.time_maa_k + mk)
+        xv = x + dxprev * (self.time_maa_v + mv)
+        xw = x + dxprev * (self.time_maa_w + mw)
+        xv2 = x + dxprev * (self.time_maa_v2 + mv2)
         
         r = self.receptance(xr)
         k = self.key(xk)

@@ -70,7 +70,8 @@ class RWKV_Tmix_taylor(MyModule):
         k = self.key(xk).view(B,T,H,K).transpose(1,2)
         v = self.value(xv).view(B,T,H,V).transpose(1,2)
         w = self.decay(xv).view(B,T,H).transpose(1,2)
-        w = (-w.exp()).exp()
+        #w = (-w.exp()).exp()
+        w = torch.sigmoid(2.0 + w)
 
         # normalize each head
         q = self.ln_q(q)

@@ -19,6 +19,7 @@ from .tmix_x052 import RWKV_Tmix_x052
 from .tmix_x060 import RWKV_Tmix_x060
 from .tmix_x060bbswa import RWKV_Tmix_x060bbswa
 from .tmix_x060b import RWKV_Tmix_x060b
+from .tmix_x060b2 import RWKV_Tmix_x060b2
 from .tmix_x060b5 import RWKV_Tmix_x060b5
 from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
@@ -89,6 +90,8 @@ class Block(nn.Module):
             attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id)
         elif mt.startswith('x060b5'):
             attFactory = lambda: RWKV_Tmix_x060b5(args, layer_id)
+        elif mt.startswith('x060b2'):
+            attFactory = lambda: RWKV_Tmix_x060b2(args, layer_id)
         elif mt.startswith('x060b'):
             attFactory = lambda: RWKV_Tmix_x060b(args, layer_id)
         elif mt.startswith('x060o3'):
@@ -287,13 +290,13 @@ class RWKV(pl.LightningModule):
                 BlockState(
                     TimeMixState(
                         torch.zeros([B, args.dim_att//args.head_size_a, args.head_size_a, args.head_size_a], dtype=dtype, device=idx.device, requires_grad=requires_grad), 
-                        torch.zeros([B, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                        torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                     ), 
                     ChannelMixState(
                         torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                     )
                 ) 
-                for _ in range(args.n_layer)
+                for layer_id in range(args.n_layer)
             ]
 
         x = self.drop0(x)
@@ -341,20 +344,24 @@ class RWKV(pl.LightningModule):
         for metric in self.metrics.values():
             metric.update(margs)
 
-        if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0 and (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
-            if self.trainer.is_global_zero:
-                logdict = dict(tokens = self.get_real_tokens())
-                #str = f"epoch:{self.current_epoch} token:{self.all_nodes_tokens_processed:,} step:{batch_idx} "
+        if self.trainer.is_global_zero:
+            if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
+                # stupid hack bc lightning expects us to log every actual step
                 for name, metric in self.metrics.items():
                     metric_value = metric.compute()
-                    logdict['train/' + name] = metric_value
-                    metric.clear()
                     self.log(name, metric_value, on_step=True, rank_zero_only=True)
-                    #str += f'{name}:{metric_value:.4f} '
-                #str += f"{gb:.1f}gb {int(ms_per)}ms {ktok_per_sec:.2f}kT/s {self.total_runtime:.1f}sec"
-                #print(str)
-                if len(self.args.wandb) > 0:
-                    self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
+                if (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
+                    logdict = dict(tokens = self.get_real_tokens())
+                    #str = f"epoch:{self.current_epoch} token:{self.all_nodes_tokens_processed:,} step:{batch_idx} "
+                    for name, metric in self.metrics.items():
+                        metric_value = metric.compute()
+                        logdict['train/' + name] = metric_value
+                        metric.clear()
+                        #str += f'{name}:{metric_value:.4f} '
+                    #str += f"{gb:.1f}gb {int(ms_per)}ms {ktok_per_sec:.2f}kT/s {self.total_runtime:.1f}sec"
+                    #print(str)
+                    if len(self.args.wandb) > 0:
+                        self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
 
         return L2Wrap.apply(loss, logits)
 
@@ -393,7 +400,7 @@ class RWKV(pl.LightningModule):
             #self.log('val/'+name, metric.compute(), on_epoch=True, rank_zero_only=True)
             #metric.clear()
         #self.log("tokens", float(self.all_nodes_tokens_processed), on_epoch=True, rank_zero_only=True)
-        return logits
+        return loss
 
     # def training_step_end(self, batch_parts):
     #     if pl.__version__[0]!='2':

@@ -21,15 +21,17 @@ m_bsz=16
 grad_cp=1 # turn on grad_cp to save VRAM
 save_period=10
 accumulate_grad_batches=1
+head_size=64
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --model_type) model_type="$2"; shift ;;
         --layer) layer="$2"; shift ;;
         --emb) emb="$2"; shift ;;
+        --ctx_len) ctx_len="$2"; shift ;;
+        --head_size) head_size="$2"; shift ;;
         --lr_init) lr_init="$2"; shift ;;
         --lr_final) lr_final="$2"; shift ;;
-        --ctx_len) ctx_len="$2"; shift ;;
         --n_gpu) n_gpu="$2"; shift ;;
         --m_bsz) m_bsz="$2"; shift ;;
         --grad_cp) grad_cp="$2"; shift ;;
@@ -70,6 +72,6 @@ python train.py --load_model "0" --wandb "Linear_Attention_Arena" --proj_dir $PR
  --data_file "data/minipile" --validation_data_file "data/minipile_validation" --val_check_interval 400 --my_exit_tokens 1498226207 --magic_prime 2926181  \
  --num_nodes $N_NODE --micro_bsz $m_bsz --n_layer $layer --n_embd $emb \
  --lr_init $lr_init --lr_final $lr_final --warmup_steps 10 --beta1 0.9 --beta2 0.99 --adam_eps 1e-8 --data_type "binidx" --vocab_size 65536 \
- --weight_decay 0.001 --epoch_save $save_period --head_size_a 128 \
+ --weight_decay 0.001 --epoch_save $save_period --head_size_a $head_size \
  --accelerator gpu --devices $n_gpu --precision bf16 --strategy deepspeed_stage_2 --grad_cp $grad_cp --ds_bucket_mb $DS_BUCKET_MB \
  --accumulate_grad_batches $accumulate_grad_batches

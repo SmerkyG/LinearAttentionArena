@@ -15,8 +15,10 @@
 model_type=""
 layer=0
 emb=0
+dim_att=0
 ctx_len=512 # !!! change magic_prime if you change ctx_len !!!
 suffix=""
+head_size=64
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -24,6 +26,7 @@ while [[ "$#" -gt 0 ]]; do
         --layer) layer="$2"; shift ;;
         --emb) emb="$2"; shift ;;
         --ctx_len) ctx_len="$2"; shift ;;
+        --head_size) head_size="$2"; shift ;;
         --suffix) suffix="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
@@ -51,7 +54,7 @@ rm -f "$PROJ_DIR"/rwkv-{0..100}.pth # remove old checkpts in folder
 python train.py --wandb "" --proj_dir $PROJ_DIR \
  --data_file "data/minipile" --data_type "binidx" --vocab_size 65536 --model_type $model_type \
  --ctx_len $ctx_len --train_stage 1 --epoch_count 1 --epoch_begin 0 \
- --epoch_save 1 --weight_decay 0 --head_size_a 128 \
+ --epoch_save 1 --weight_decay 0 --head_size_a $head_size \
  --num_nodes 1 --micro_bsz 1 --n_layer $layer --n_embd $emb --my_exit_tokens 1498226207 --magic_prime 2926181 \
  --lr_init 1e-5 --lr_final 1e-5 --warmup_steps 10 --beta1 0.9 --beta2 0.99 --adam_eps 1e-8 \
  --accelerator cpu --devices 1 --precision bf16 --strategy deepspeed_stage_2 --grad_cp 1
