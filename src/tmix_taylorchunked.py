@@ -14,7 +14,7 @@ class RWKV_Tmix_taylorchunked(MyModule):
 
         self.n_layer = args.n_layer
 
-        self.head_size = args.head_size_a * 2
+        self.head_size = args.head_size_a
         self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
 
@@ -70,10 +70,11 @@ class RWKV_Tmix_taylorchunked(MyModule):
         v = self.value(xv).view(B,T,H,V).transpose(1,2)
         w = self.decay(xv).view(B,T,H).transpose(1,2)
         #w = (-w.exp()).exp()
-        w_log = -(w - 2).exp() # start at around 87%
-        w_log = w_log.clamp(math.log(0.005))
-        #w = torch.sigmoid(2.0 + w)
-        #w_log = (0.005 + 0.995 * w).log()
+        #w_log = -(w - 2).exp() # start at around 87%
+        #w_log = w_log.clamp(math.log(0.005))
+        #w_log = torch.ones_like(w_log) * 0.9 # FIXME
+        w = torch.sigmoid(2.0 + w.float())
+        w_log = (0.005 + 0.995 * w).log()
 
         # normalize each head
         q = self.ln_q(q)
@@ -81,50 +82,71 @@ class RWKV_Tmix_taylorchunked(MyModule):
 
         # chunk
         L = T
-        T = 16
+        T = 512 #16
         N = L // T
         assert T * N == L, 'context length must be an even multiple of chunk size'
         q = q.view(B,H,N,T,Q)
         k = k.view(B,H,N,T,K)
         v = v.view(B,H,N,T,V)
         #w = w.view(B,H,N,T)
-        w_log = w_log.view(B,H,N,T,1)
+        #w_log = w_log.view(B,H,N,T,1)
 
-        w_log_cumsum = w_log.cumsum(dim=-2).view(B,H,N,T,1)
-        w_chunk = w_log_cumsum[:,:,:,-1:,:].view(B,H,N,1,1) # decay across full chunk
-        w_inter = w_chunk - w_log_cumsum    # w1:4 = w0:4 - w0:1
-        w_intra = w_log_cumsum - w_log      # w1:3 = w0:3 - w0
+        w_log_cumsum = w_log.cumsum(dim=-2).view(B,H,N,T,1).to(q.dtype)
+        # w_chunk = w_log_cumsum[:,:,:,-1:,:].view(B,H,N,1,1) # decay across full chunk
+        # w_inter = w_chunk - w_log_cumsum    # w1:4 = w0:4 - w0:1
+        # w_intra = w_log_cumsum - w_log      # w1:3 = w0:3 - w0
 
-        #shifted_w_cumprod = F.pad(w_log_cumsum, (0, 0, 1, -1)).exp().view(B,H,N,T,K)
-        w_cumprod = w_log_cumsum.exp().view(B,H,N,T,1)
-        w_chunk = w_chunk.exp().to(k.dtype).view(B,H,N,1,1)
-        w_inter = w_inter.exp().to(k.dtype).view(B,H,N,T,1)
-        w_intra = w_intra.exp().to(k.dtype).view(B,H,N,T,1)
+        # #shifted_w_cumprod = F.pad(w_log_cumsum, (0, 0, 1, -1)).exp().view(B,H,N,T,K)
+        # w_cumprod = w_log_cumsum.exp().view(B,H,N,T,1)
+        # w_chunk = w_chunk.exp().to(k.dtype).view(B,H,N,1,1)
+        # w_inter = w_inter.exp().to(k.dtype).view(B,H,N,T,1)
+        # w_intra = w_intra.exp().to(k.dtype).view(B,H,N,T,1)
 
-        #w = w_intra.expand(B,H,N,T,T).masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).tril()
+        # #w = w_intra.expand(B,H,N,T,T).masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).tril()
 
-        # intra-chunk and v_first
-        attn = ((q * w_cumprod) @ (k / w_cumprod).mT).to(k.dtype).tril(-1) # + torch.eye(T, T).expand(B, T, T)
-        attn = q @ k.mT
-        attn = 1 + attn + 0.5 * attn.square() # taylor series approximation to exp
-        #attn = (attn * w).to(q.dtype)
-        # NOTE - we may eventually want denominator, a la rwkv4
-        #attn = attn / attn.sum(-1, keepdim=True).clamp(eps)
-        y = attn @ v + v
+        # # intra-chunk and v_first
+        # attn = ((q * w_cumprod) @ (k / w_cumprod).mT).to(k.dtype).tril(-1) # + torch.eye(T, T).expand(B, T, T)
+        # attn = q @ k.mT
+        # attn = 1 + attn + 0.5 * attn.square() # taylor series approximation to exp
+        # #attn = (attn * w).to(q.dtype)
+        # # NOTE - we may eventually want denominator, a la rwkv4
+        # #attn = attn / attn.sum(-1, keepdim=True).clamp(eps)
+        # y = attn @ v + v
 
-        # inter-chunk        
-        wkv_state = last_state.wkv_state
-        wkv_states = []
-        wkv = ((k * w_inter).mT @ v).view(B,H,N,K,V)
-        wkv = list(wkv.unbind(dim=-3)) # N x BHKV
-        w_chunk = list(w_chunk.unbind(dim=-3))
-        for n in range(N):
-            wkv_states.append(wkv_state)
-            wkv_state = wkv_state * w_chunk[n].mT + wkv[n]
-        wkv_states = torch.stack(wkv_states, dim=2) # BHNKV       
-        y = y + (q * w_intra) @ wkv_states
+        # # inter-chunk        
+        # wkv_state = last_state.wkv_state
+        # wkv_states = []
+        # wkv = ((k * w_inter).mT @ v).view(B,H,N,K,V)
+        # wkv = list(wkv.unbind(dim=-3)) # N x BHKV
+        # w_chunk = list(w_chunk.unbind(dim=-3))
+        # for n in range(N):
+        #     wkv_states.append(wkv_state)
+        #     wkv_state = wkv_state * w_chunk[n].mT + wkv[n]
+        # wkv_states = torch.stack(wkv_states, dim=2) # BHNKV       
+        # y = y + (q * w_intra) @ wkv_states
 
-        y = y.transpose(1,2).reshape(B,T,C)
+        y = torch.zeros((B, H, N, T, V), device=q.device, dtype=q.dtype)
+        for i in range(N):
+            for j in range(i+1):
+                qi, kj, vj = q[:,:,i], k[:,:,j], v[:,:,j]
+                log_wi, log_wj = w_log_cumsum[:,:,i], w_log_cumsum[:,:,j]
+                mask = (log_wi-log_wj.mT).exp().to(q.dtype)
+                if i == j:
+                    mask = mask.tril()
+                #if i == j:
+                #    mask = mask.masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).tril()
+                att = qi @ kj.mT
+                #att = 1 + att + 0.5 * att.square()
+                att = att.square()
+                att = (att * mask).to(q.dtype)
+                #if i == j:
+                #    att = att.masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).tril()
+                y[:,:,i] += att @ vj #((qq @ kk).square() * mask) @ vv
+
+        # dechunk
+        y = y.view(B,H,L,V).to(x.dtype)
+        
+        y = y.transpose(1,2).reshape(B,L,C)
 
         y = self.ln_x(y)
 
