@@ -70,7 +70,7 @@ class RWKV_Tmix_taylorchunked(MyModule):
         v = self.value(xv).view(B,T,H,V).transpose(1,2)
         w = self.decay(xv).view(B,T,H).transpose(1,2)
         #w = (-w.exp()).exp()
-        #w_log = -(w - 2).exp() # start at around 87%
+        #w_log = -((w - 2).clamp(None,20)).exp() # start at around 87%
         #w_log = w_log.clamp(math.log(0.005))
         #w_log = torch.ones_like(w_log) * 0.9 # FIXME
         w = torch.sigmoid(2.0 + w.float())
@@ -91,7 +91,8 @@ class RWKV_Tmix_taylorchunked(MyModule):
         #w = w.view(B,H,N,T)
         #w_log = w_log.view(B,H,N,T,1)
 
-        w_log_cumsum = w_log.cumsum(dim=-2).view(B,H,N,T,1).to(q.dtype)
+        w_log_cumsum = w_log.cumsum(dim=-1).to(torch.float16)
+        w_log_cumsum = w_log_cumsum.view(B,H,N,T,1) #.to(q.dtype)
         # w_chunk = w_log_cumsum[:,:,:,-1:,:].view(B,H,N,1,1) # decay across full chunk
         # w_inter = w_chunk - w_log_cumsum    # w1:4 = w0:4 - w0:1
         # w_intra = w_log_cumsum - w_log      # w1:3 = w0:3 - w0
@@ -130,18 +131,23 @@ class RWKV_Tmix_taylorchunked(MyModule):
             for j in range(i+1):
                 qi, kj, vj = q[:,:,i], k[:,:,j], v[:,:,j]
                 log_wi, log_wj = w_log_cumsum[:,:,i], w_log_cumsum[:,:,j]
-                mask = (log_wi-log_wj.mT).exp().to(q.dtype)
+                mask = (log_wi-log_wj.mT).clamp(None, 0).exp().to(q.dtype)
                 if i == j:
                     mask = mask.tril()
+                #print(float(mask.flatten().min()), float(mask.flatten().max()))
                 #if i == j:
                 #    mask = mask.masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).tril()
                 att = qi @ kj.mT
                 #att = 1 + att + 0.5 * att.square()
                 att = att.square()
-                att = (att * mask).to(q.dtype)
+                att = att * mask
+                #if i == j:
+                #    att = att.tril(-1)
                 #if i == j:
                 #    att = att.masked_fill(torch.ones(T,T,dtype=torch.bool,device=k.device).triu(),1).tril()
                 y[:,:,i] += att @ vj #((qq @ kk).square() * mask) @ vv
+        #y += v
+                
 
         # dechunk
         y = y.view(B,H,L,V).to(x.dtype)
