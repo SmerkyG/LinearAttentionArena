@@ -111,7 +111,7 @@ class RWKV_Tmix_attn(MyModule):
         V = C // H
 
         shift_state = x[:, -1].clone()
-        dxprev = torch.concat((shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
 
