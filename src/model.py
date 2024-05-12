@@ -25,6 +25,7 @@ from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
 from .tmix_taylorchunked import RWKV_Tmix_taylorchunked
 from .tmix_attn import RWKV_Tmix_attn
+from .tmix_poco import RWKV_Tmix_poco
 
 from .cmix_x052 import RWKV_CMix_x052
 from .cmix_x060 import RWKV_CMix_x060
@@ -118,6 +119,13 @@ class Block(nn.Module):
                 else:
                     attFactory = lambda: RWKV_Tmix_taylor(args, layer_id)
 
+        if '_attn' in mt:
+            if layer_id >= args.n_layer // 2:
+                attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
+        elif '_poco' in mt:
+            if layer_id >= args.n_layer // 2:
+                attFactory = lambda: RWKV_Tmix_poco(args, layer_id)
+
         self.att = attFactory()
         if ffnFactory is None:
             self.ln2 = None
@@ -135,14 +143,17 @@ class Block(nn.Module):
 
 
     @TCompile
-    def forward(self, x, last_state:BlockState):
+    def forward(self, x, kv_cache, last_state:BlockState):
         args = self.args
         B, T, C = x.size()
         if self.layer_id == 0:
             x = self.ln0(x)
 
+        att_x = self.ln1(x)
+        if len(kv_cache.shape) > 0:
+            att_x = (att_x, kv_cache)
         if not self.parallel:
-            dx, time_mix_state = self.att(self.ln1(x), last_state.time_mix_state)
+            dx, time_mix_state = self.att(att_x, last_state.time_mix_state)
             x = self.drop0(x + dx)
             if self.ln2 is not None and self.ffn is not None:
                 dx, channel_mix_state = self.ffn(self.ln2(x), last_state.channel_mix_state)
@@ -151,7 +162,7 @@ class Block(nn.Module):
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
-            dx_att, time_mix_state = self.att(self.ln1(x), last_state.time_mix_state)
+            dx_att, time_mix_state = self.att(att_x, last_state.time_mix_state)
             dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_state.channel_mix_state)
             x = self.drop0(x + dx_att + dx_ffn)
 
@@ -196,6 +207,10 @@ class RWKV(pl.LightningModule):
             self.drop0 = nn.Dropout(p = args.dropout)
         else:
             self.drop0 = nn.Identity()
+
+        mt = os.environ["RWKV_MODEL_TYPE"]
+        if '_poco' in mt:
+            self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
 
     def configure_optimizers(self):
         args = self.args
@@ -305,15 +320,22 @@ class RWKV(pl.LightningModule):
 
         x = self.drop0(x)
         
+        mt = os.environ["RWKV_MODEL_TYPE"]
         next_block_states = []
+        kv_cache = torch.tensor(0, device=x.device, dtype=x.dtype)
+        layer_id = -1
         for last_block_state, block in zip(last_block_states, self.blocks):
+            layer_id += 1            
+            block_args = [x, kv_cache, last_block_state]
             if self.training and args.grad_cp == 1:
                 if "deepspeed" in args.strategy:
-                    x, next_block_state = deepspeed.checkpointing.checkpoint(block, x, last_block_state)
+                    x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
                 else:
-                    x, next_block_state = torch.utils.checkpoint.checkpoint(block, x, last_block_state, use_reentrant=False)
+                    x, next_block_state = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
             else:
-                x, next_block_state = block(x, last_block_state)
+                x, next_block_state = block(*block_args)
+            if '_poco' in mt and layer_id == self.args.n_layer // 2 - 1:
+                kv_cache = self.w_kv_cache(x)
             next_block_states.append(next_block_state)
 
         x = self.ln_out(x)
@@ -435,7 +457,7 @@ class RWKV(pl.LightningModule):
             print(f"{s0.ljust(5)} {s1.ljust(5)} {s2.ljust(5)} {n}", end="")
 
             scale = 1.0
-            if len(p.shape) > 2 or "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
+            if len(p.shape) > 2 or "sin" in n or "cos" in n or "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
                 if 'ln_x' in n and n.endswith('.weight'):
                     layer_scale = (1+int(n.split('.')[1])) / self.args.n_layer
                     m[n] = (p * 0.0) + (layer_scale ** 0.7)

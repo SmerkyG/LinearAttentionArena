@@ -8,6 +8,8 @@ from .tmix import TimeMixState
 
 import math
 
+from typing import Tuple
+
 def causal_bias_mask(T):
     return torch.full((T, T), float('-inf')).triu(1)
 
@@ -65,7 +67,7 @@ def l2_norm(x, eps:float = 1e-8):
     # assumes that vector 'normally' has length 1, not length vec.size(-1)**0.5 (which would be if every component had an average absolute value of 1!)
     return x / (x.norm(2, dim=-1, keepdim=True) + eps)
 
-class RWKV_Tmix_attn(MyModule):
+class RWKV_Tmix_poco(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -92,8 +94,6 @@ class RWKV_Tmix_attn(MyModule):
             self.time_maa_w2 = nn.Parameter(torch.zeros(3, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
         self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_r = nn.LayerNorm(args.dim_att)
@@ -104,7 +104,9 @@ class RWKV_Tmix_attn(MyModule):
         #self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
     @MyFunction
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x_and_kv_cache:Tuple[Tensor, Tensor], last_state:TimeMixState):
+        x, kv_cache = x_and_kv_cache
+
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -124,9 +126,7 @@ class RWKV_Tmix_attn(MyModule):
         xv = x + dxprev * (self.time_maa_v + mv)
         
         lr = self.receptance(xr)
-        lk = self.key(xk)
-        lv = self.value(xv)
-        lg = self.value(xr)
+        lk, lv = kv_cache.view(B,T,2,-1).unbind(-2)
         
         lr = self.ln_r(lr)
         lk = self.ln_k(lk)
