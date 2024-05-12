@@ -101,6 +101,8 @@ class RWKV_Tmix_poco(MyModule):
         self.ln_v = nn.LayerNorm(args.dim_att)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
+        self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
+
         #self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
     @MyFunction
@@ -120,13 +122,16 @@ class RWKV_Tmix_poco(MyModule):
         xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, self.time_maa_w2.size(0), -1).transpose(0, 1)
         xxx = torch.bmm(xxx, self.time_maa_w2).view(self.time_maa_w2.size(0), B, T, C)
 
+        xk, xv = kv_cache.view(B,T,2,-1).unbind(-2)
+        dxkprev = self.time_shift(xk) - xk
+        dxvprev = self.time_shift(xv) - xv
+
         mr, mk, mv = xxx.unbind(dim=0)
         xr = x + dxprev * (self.time_maa_r + mr)
-        xk = x + dxprev * (self.time_maa_k + mk)
-        xv = x + dxprev * (self.time_maa_v + mv)
+        lk = xk + dxkprev * (self.time_maa_k + mk)
+        lv = xv + dxvprev * (self.time_maa_v + mv)
         
         lr = self.receptance(xr)
-        lk, lv = kv_cache.view(B,T,2,-1).unbind(-2)
         
         lr = self.ln_r(lr)
         lk = self.ln_k(lk)
