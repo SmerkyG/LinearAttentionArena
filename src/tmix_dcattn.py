@@ -100,10 +100,10 @@ class RWKV_Tmix_dcattn(MyModule):
         self.ln_v = nn.LayerNorm(args.dim_att)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-        self.DYNPROJ_EXPANSION = 1
-        D_DYNPROJ_LORA = args.dim_att // 8
+        R = 2
+        D_DYNPROJ_LORA = self.n_head * R
         self.dynproj_w1 = nn.Parameter(torch.zeros(args.n_embd, D_DYNPROJ_LORA*8))
-        self.dynproj_w2 = nn.Parameter(torch.zeros(8, D_DYNPROJ_LORA, self.n_head).uniform_(-0.01, 0.01))
+        self.dynproj_w2 = nn.Parameter(torch.zeros(8, D_DYNPROJ_LORA, self.n_head * R).uniform_(-0.01, 0.01))
         self.dyngate_w1 = nn.Parameter(torch.zeros(args.n_embd, self.n_head*4).uniform_(-0.01, 0.01))
 
         self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
@@ -127,9 +127,9 @@ class RWKV_Tmix_dcattn(MyModule):
         #     y = y + torch.einsum('BNTS,NM->BMTS', inputs, sw)
         #for i in range(qpw1.shape[-2]):
         # 'dynamic projection'
-        # "lora" by reducing heads away, then adding heads back in
-        y = y + torch.einsum('BNTS,BTN,BTM->BMTS', x, qpw1, qpw2) #* self.DYNPROJ_EXPANSION
-        y = y + torch.einsum('BNTS,BSN,BTM->BMTS', x, kpw1, kpw2) #* self.DYNPROJ_EXPANSION
+        # "lora" by reducing heads away down to R (which is 2), then adding heads back in
+        y = y + torch.einsum('BNTS,BTRN,BTRM->BMTS', x, qpw1, qpw2)
+        y = y + torch.einsum('BNTS,BSRN,BTRM->BMTS', x, kpw1, kpw2)
         # 'dynamic gating'
         y = y + torch.einsum('BNTS,BTN->BNTS', x, qgw)
         y = y + torch.einsum('BNTS,BSN->BNTS', x, kgw)
@@ -168,9 +168,10 @@ class RWKV_Tmix_dcattn(MyModule):
         v = v.view(B,-1,N,K).transpose(1,2)
 
         B,N,T,Q = q.shape
+        R = 2
 
 
-        dynproj_w1s, dynproj_w2s = self.batch_lora(F.gelu(x @ self.dynproj_w1), self.dynproj_w2).view(2,4,B,T,N).unbind(0)
+        dynproj_w1s, dynproj_w2s = self.batch_lora(F.gelu(x @ self.dynproj_w1), self.dynproj_w2).view(2,4,B,T,R,N).unbind(0)
         pre_qpw1, pre_kpw1, post_qpw1, post_kpw1 = rms_norm(dynproj_w1s).unbind(0)
         pre_qpw2, pre_kpw2, post_qpw2, post_kpw2 = dynproj_w2s.unbind(0)
 
