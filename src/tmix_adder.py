@@ -100,8 +100,14 @@ class RWKV_Tmix_adder(MyModule):
         #w_log = w_log.clamp(-5, 0)
         #w_log = w_log.clamp(math.log(0.005))
         #w = w_log.exp()
-        w = 0.005 + 0.995 * F.sigmoid(self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2)
-        k = (k * (1 - w)).to(k.dtype)
+        #w = 0.005 + 0.995 * F.sigmoid(self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2)
+        w = 0.01 + 0.9899 * F.sigmoid(self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2).float()
+        #k = (k * (1 - w)).to(k.dtype)
+
+        range_div = 1.0 / torch.arange(1,T+1,device=x.device,dtype=x.dtype).unsqueeze(-1).float()
+        k = (k * range_div).to(x.dtype)
+        w = w * (1.0-range_div).clamp(0.5, None)
+
         w_log = w.log()
 
         q = q.view(B,T,H,Q).transpose(1,2).view(B,H,T,Q)
