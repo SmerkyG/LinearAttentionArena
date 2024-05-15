@@ -94,7 +94,6 @@ class RWKV_Tmix_dcattn(MyModule):
         self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_r = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
@@ -105,9 +104,7 @@ class RWKV_Tmix_dcattn(MyModule):
         D_DYNPROJ_LORA = args.dim_att // 8
         self.dynproj_w1 = nn.Parameter(torch.zeros(args.n_embd, D_DYNPROJ_LORA*8))
         self.dynproj_w2 = nn.Parameter(torch.zeros(8, D_DYNPROJ_LORA, self.n_head).uniform_(-0.01, 0.01))
-        D_DYNGATE_LORA = args.dim_att // 8
-        self.dyngate_w1 = nn.Parameter(torch.zeros(args.n_embd, D_DYNGATE_LORA*4))
-        self.dyngate_w2 = nn.Parameter(torch.zeros(4, D_DYNGATE_LORA, self.n_head).uniform_(-0.01, 0.01))
+        self.dyngate_w1 = nn.Parameter(torch.zeros(args.n_embd, self.n_head*4).uniform_(-0.01, 0.01))
 
         self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
@@ -161,7 +158,6 @@ class RWKV_Tmix_dcattn(MyModule):
         q = self.receptance(xq)
         k = self.key(xk)
         v = self.value(xv)
-        g = self.value(xq)
         
         q = self.ln_r(q)
         k = self.ln_k(k)
@@ -178,7 +174,7 @@ class RWKV_Tmix_dcattn(MyModule):
         pre_qpw1, pre_kpw1, post_qpw1, post_kpw1 = rms_norm(dynproj_w1s).unbind(0)
         pre_qpw2, pre_kpw2, post_qpw2, post_kpw2 = dynproj_w2s.unbind(0)
 
-        pre_qgw, pre_kgw, post_qgw, post_kgw = self.batch_lora(torch.tanh(x @ self.dyngate_w1), self.dyngate_w2).view(4,B,T,N).unbind(0)
+        pre_qgw, pre_kgw, post_qgw, post_kgw = torch.tanh(x @ self.dyngate_w1).view(B,T,4,N).unbind(2)
 
         #pre = dict(qpw1=pre_qpw1, qpw2=pre_qpw2, kpw1=pre_kpw1, kpw2=pre_kpw2, qgw=pre_qgw, kgw=pre_kgw)
         #post = dict(qpw1=post_qpw1, qpw2=post_qpw2, kpw1=post_kpw1, kpw2=post_kpw2, qgw=post_qgw, kgw=post_kgw)
