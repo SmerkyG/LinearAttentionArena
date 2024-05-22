@@ -68,6 +68,9 @@ class BlockState:
         self.time_mix_state = time_mix_state
         self.channel_mix_state = channel_mix_state
 
+def get_first_poco_layer_id(n_layer):
+    return (2*n_layer)//3
+
 class Block(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
@@ -122,11 +125,20 @@ class Block(nn.Module):
         if '_attn' in mt:
             if layer_id >= args.n_layer // 2:
                 attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
-        elif '_poco' in mt:
-            if layer_id >= args.n_layer // 2:
-                attFactory = lambda: RWKV_Tmix_poco(args, layer_id)
+
+        pocoFactory = lambda: None
+        self.is_poco = '_poco' in mt
+        if self.is_poco:
+            if layer_id >= get_first_poco_layer_id(args.n_layer) and layer_id < args.n_layer:
+                attFactory = lambda: None
+                if '_pocobha' in mt:
+                    pocoFactory = lambda: RWKV_Tmix_pocobha(args, layer_id)
+                else:
+                    pocoFactory = lambda: RWKV_Tmix_poco(args, layer_id)
 
         self.att = attFactory()
+        self.poco = pocoFactory()
+        
         if ffnFactory is None:
             self.ln2 = None
             self.ffn = None
@@ -153,8 +165,14 @@ class Block(nn.Module):
         if len(kv_cache.shape) > 0:
             att_x = (att_x, kv_cache)
         if not self.parallel:
-            dx, time_mix_state = self.att(att_x, last_state.time_mix_state)
-            x = self.drop0(x + dx)
+            if self.att is not None:
+                dx, time_mix_state = self.att(att_x, last_state.time_mix_state)
+                x = self.drop0(x + dx)
+            elif self.poco is not None:
+                dx, time_mix_state = self.poco(att_x, last_state.time_mix_state)
+                x = self.drop0(x + dx)
+            else:
+                time_mix_state = last_state.time_mix_state
             if self.ln2 is not None and self.ffn is not None:
                 dx, channel_mix_state = self.ffn(self.ln2(x), last_state.channel_mix_state)
                 x = self.drop0(x + dx)
@@ -192,9 +210,18 @@ class RWKV(pl.LightningModule):
         self.metrics = dict(loss=metrics.Loss(), acc=metrics.Accuracy())
 
         self.args = args
+
+        if args.dim_att <= 0:
+            args.dim_att = args.n_embd
+        if args.dim_ffn <= 0:
+            args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32)  # default = was 3.5x emb size, now 4x without gate
+
         assert args.n_embd % 32 == 0
         assert args.dim_att % 32 == 0
         assert args.dim_ffn % 32 == 0
+
+        mt = os.environ["RWKV_MODEL_TYPE"]
+        self.is_poco = '_poco' in mt
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
@@ -208,9 +235,14 @@ class RWKV(pl.LightningModule):
         else:
             self.drop0 = nn.Identity()
 
-        mt = os.environ["RWKV_MODEL_TYPE"]
-        if '_poco' in mt:
+        if self.is_poco:
+            #self.ln_kv_cache = nn.LayerNorm(args.n_embd)
             self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
+            #self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // 4, bias=False)
+            #self.w_kv_cache_b = nn.Linear(args.n_embd // 4, 2 * args.dim_att, bias=False)
+            #self.w_kv_cache_w1 = nn.Parameter(torch.zeros(args.n_embd, args.n_embd // 4))
+            #self.w_kv_cache_w2 = nn.Parameter(torch.zeros(args.n_embd // 4, 2 * args.dim_att).uniform_(args.dim_att ** -0.5))
+
 
     def configure_optimizers(self):
         args = self.args
@@ -334,8 +366,13 @@ class RWKV(pl.LightningModule):
                     x, next_block_state = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
             else:
                 x, next_block_state = block(*block_args)
-            if '_poco' in mt and layer_id == self.args.n_layer // 2 - 1:
+            if self.is_poco and layer_id == get_first_poco_layer_id(args.n_layer) - 1:
+                # FIXME - we really need a separate shift state now for the kv_cache
+                # NOTE - the layernorm ln_kv_cache was really messing things up badly, even leading to NaN!
+                #kv_cache = self.w_kv_cache_b(rms_norm(self.w_kv_cache_a(x)))
+                #kv_cache = rms_norm(x @ self.w_kv_cache_w1) @ self.w_kv_cache_w2
                 kv_cache = self.w_kv_cache(x)
+
             next_block_states.append(next_block_state)
 
         x = self.ln_out(x)
