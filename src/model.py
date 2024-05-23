@@ -59,6 +59,10 @@ HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
 if 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
     from mamba_ssm import Mamba
 
+def rms_norm(x, eps:float = 1e-8):
+    rms_norm = (x.size(-1) ** -0.5) * x.norm(2, dim=-1, keepdim=True)
+    return x / (rms_norm + eps)
+
 ########################################################################################################
 # The RWKV Model with our blocks
 ########################################################################################################
@@ -157,9 +161,10 @@ class Block(nn.Module):
     @TCompile
     def forward(self, x, kv_cache, last_state:BlockState):
         args = self.args
+
         B, T, C = x.size()
-        if self.layer_id == 0:
-            x = self.ln0(x)
+        # if self.layer_id == 0:
+        #     x = self.ln0(x)
 
         att_x = self.ln1(x)
         if len(kv_cache.shape) > 0:
@@ -237,11 +242,20 @@ class RWKV(pl.LightningModule):
 
         if self.is_poco:
             #self.ln_kv_cache = nn.LayerNorm(args.n_embd)
-            self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
-            #self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // 4, bias=False)
-            #self.w_kv_cache_b = nn.Linear(args.n_embd // 4, 2 * args.dim_att, bias=False)
-            #self.w_kv_cache_w1 = nn.Parameter(torch.zeros(args.n_embd, args.n_embd // 4))
-            #self.w_kv_cache_w2 = nn.Parameter(torch.zeros(args.n_embd // 4, 2 * args.dim_att).uniform_(args.dim_att ** -0.5))
+            #self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
+            self.w_kv_cache_a = nn.Linear(args.n_embd * 2, args.n_embd // 4, bias=False)
+            self.w_kv_cache_b = nn.Linear(args.n_embd // 4 + args.n_embd, 2 * args.dim_att, bias=False)
+
+            with torch.no_grad():
+                ddd = torch.ones(1, 1, args.n_embd)
+                for i in range(args.n_embd):
+                    ddd[0, 0, i] = i / args.n_embd
+
+                self.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, 0.5))
+                self.time_maa_token = nn.Parameter(1.0 - torch.pow(ddd, 0.5))
+                D_MIX_LORA = 32
+                self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA))
+                self.time_maa_w2 = nn.Parameter(torch.zeros(D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
 
     def configure_optimizers(self):
@@ -351,6 +365,8 @@ class RWKV(pl.LightningModule):
             ]
 
         x = self.drop0(x)
+        x = self.blocks[0].ln0(x)
+        x_original = x
         
         mt = os.environ["RWKV_MODEL_TYPE"]
         next_block_states = []
@@ -368,10 +384,14 @@ class RWKV(pl.LightningModule):
                 x, next_block_state = block(*block_args)
             if self.is_poco and layer_id == get_first_poco_layer_id(args.n_layer) - 1:
                 # FIXME - we really need a separate shift state now for the kv_cache
-                # NOTE - the layernorm ln_kv_cache was really messing things up badly, even leading to NaN!
-                #kv_cache = self.w_kv_cache_b(rms_norm(self.w_kv_cache_a(x)))
-                #kv_cache = rms_norm(x @ self.w_kv_cache_w1) @ self.w_kv_cache_w2
-                kv_cache = self.w_kv_cache(x)
+                dx_original_prev = F.pad(x_original, (0, 0, 1, -1)) - x_original
+                xxx = x_original + dx_original_prev * self.time_maa_x
+                xxx = torch.tanh(xxx @ self.time_maa_w1) @ self.time_maa_w2
+                mtoken = xxx
+                xtoken = x_original + dx_original_prev * (self.time_maa_token + mtoken)
+
+                compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
+                kv_cache = self.w_kv_cache_b(rms_norm(torch.cat([xtoken, compressed_kv_cache],dim=-1)))
 
             next_block_states.append(next_block_state)
 
