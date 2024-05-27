@@ -243,8 +243,8 @@ class RWKV(pl.LightningModule):
         if self.is_poco:
             #self.ln_kv_cache = nn.LayerNorm(args.n_embd)
             #self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
-            self.w_kv_cache_a = nn.Linear(args.n_embd * 2, args.n_embd // 4, bias=False)
-            self.w_kv_cache_b = nn.Linear(args.n_embd // 4 + args.n_embd, 2 * args.dim_att, bias=False)
+            self.w_kv_cache_a = nn.Linear(args.n_embd * 2, args.n_embd // 16, bias=False)
+            self.w_kv_cache_b = nn.Linear(args.n_embd // 16 + args.n_embd, 2 * args.dim_att, bias=False)
 
             with torch.no_grad():
                 ddd = torch.ones(1, 1, args.n_embd)
@@ -391,7 +391,7 @@ class RWKV(pl.LightningModule):
                 xtoken = x_original + dx_original_prev * (self.time_maa_token + mtoken)
 
                 compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
-                kv_cache = self.w_kv_cache_b(rms_norm(torch.cat([xtoken, compressed_kv_cache],dim=-1)))
+                kv_cache = rms_norm(self.w_kv_cache_b(rms_norm(torch.cat([xtoken, compressed_kv_cache],dim=-1))))
 
             next_block_states.append(next_block_state)
 
