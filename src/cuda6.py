@@ -26,17 +26,19 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
         @staticmethod
         def forward(ctx, B, T, C, H, r, k, v, w, u, s):
             with torch.no_grad():
-                assert r.dtype == torch.bfloat16
-                assert k.dtype == torch.bfloat16
-                assert v.dtype == torch.bfloat16
-                assert w.dtype == torch.bfloat16
-                assert u.dtype == torch.bfloat16
-                assert s.dtype == torch.bfloat16
+                dtype = r.dtype
+                assert r.dtype == dtype
+                assert k.dtype == dtype
+                assert v.dtype == dtype
+                assert w.dtype == dtype
+                assert u.dtype == dtype
+                assert s.dtype == dtype
                 assert HEAD_SIZE == C // H
                 ctx.B = B
                 ctx.T = T
                 ctx.C = C
                 ctx.H = H
+                ctx.dtype = dtype
                 assert r.is_contiguous()
                 assert k.is_contiguous()
                 assert v.is_contiguous()
@@ -44,14 +46,22 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
                 assert u.is_contiguous()
                 assert s.is_contiguous()
                 ctx.save_for_backward(r, k, v, w, u)
-                y = torch.empty((B, T, C), device=r.device, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
-                wkv6_cuda.forward(B, T, C, H, r, k, v, w, u, s, y)
+                y = torch.empty((B, T, C), device=r.device, dtype=dtype, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
+                if dtype == torch.bfloat16:
+                    wkv6_cuda.forward_bf16(B, T, C, H, r, k, v, w, u, s, y)
+                elif dtype == torch.float16:
+                    wkv6_cuda.forward_fp16(B, T, C, H, r, k, v, w, u, s, y)
+                elif dtype == torch.float32:
+                    wkv6_cuda.forward_fp32(B, T, C, H, r, k, v, w, u, s, y)
+                else:
+                    raise ValueError(f"Unsupported dtype {dtype} for WKV_6")
                 return y
 
         @staticmethod
         def backward(ctx, gy):
             with torch.no_grad():
-                assert gy.dtype == torch.bfloat16
+                dtype = ctx.dtype
+                assert gy.dtype == dtype
                 B = ctx.B
                 T = ctx.T
                 C = ctx.C
@@ -66,7 +76,14 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
                 gw = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
                 gu = torch.empty((B, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
                 #gs = torch.empty((B, H, C//H, C//H), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
-                wkv6_cuda.backward(B, T, C, H, r, k, v, w, u, gy, gr, gk, gv, gw, gu)
+                if dtype == torch.bfloat16:
+                    wkv6_cuda.backward_bf16(B, T, C, H, r, k, v, w, u, gy, gr, gk, gv, gw, gu)
+                elif dtype == torch.float16:
+                    wkv6_cuda.backward_fp16(B, T, C, H, r, k, v, w, u, gy, gr, gk, gv, gw, gu)
+                elif dtype == torch.float32:
+                    wkv6_cuda.backward_fp32(B, T, C, H, r, k, v, w, u, gy, gr, gk, gv, gw, gu)
+                else:
+                    raise ValueError(f"Unsupported dtype {dtype} for WKV6_CUDA")
                 gu = torch.sum(gu, 0).view(H, C//H)
                 return (None, None, None, None, gr, gk, gv, gw, gu, None)
 

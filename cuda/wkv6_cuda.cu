@@ -2,6 +2,8 @@
 #include <assert.h>
 #include "ATen/ATen.h"
 typedef at::BFloat16 bf16;
+typedef at::Half fp16;
+typedef float fp32;
 
 template <typename F>
 __global__ void kernel_forward(const int B, const int T, const int C, const int H,
@@ -271,14 +273,45 @@ __global__ void kernel_backward_201(const int B, const int T, const int C, const
     _gw[t_T_1] = 0;
 }
 
-void cuda_forward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, bf16 *w, bf16 *u, bf16 *s, bf16 *y)
+
+void cuda_forward_bf16(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, bf16 *w, bf16 *u, bf16 *s, bf16 *y)
+{
+    assert(H*_N_ == C);
+    assert(_N_%4 == 0);
+    kernel_forward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, s, y);
+}
+void cuda_forward_fp16(int B, int T, int C, int H, fp16 *r, fp16 *k, fp16 *v, fp16 *w, fp16 *u, fp16 *s, fp16 *y)
+{
+    assert(H*_N_ == C);
+    assert(_N_%4 == 0);
+    kernel_forward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, s, y);
+}
+void cuda_forward_fp32(int B, int T, int C, int H, fp32 *r, fp32 *k, fp32 *v, fp32 *w, fp32 *u, fp32 *s, fp32 *y)
 {
     assert(H*_N_ == C);
     assert(_N_%4 == 0);
     kernel_forward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, s, y);
 }
 
-void cuda_backward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, bf16 *w, bf16 *u, bf16 *gy, bf16 *gr, bf16 *gk, bf16 *gv, bf16 *gw, bf16 *gu)
+void cuda_backward_bf16(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, bf16 *w, bf16 *u, bf16 *gy, bf16 *gr, bf16 *gk, bf16 *gv, bf16 *gw, bf16 *gu)
+{
+    assert(H*_N_ == C);
+    assert(_N_%4 == 0);
+    kernel_backward_101<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gr, gu);
+    kernel_backward_102<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gk);
+    kernel_backward_103<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gv);
+    kernel_backward_201<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gw);
+}
+void cuda_backward_fp16(int B, int T, int C, int H, fp16 *r, fp16 *k, fp16 *v, fp16 *w, fp16 *u, fp16 *gy, fp16 *gr, fp16 *gk, fp16 *gv, fp16 *gw, fp16 *gu)
+{
+    assert(H*_N_ == C);
+    assert(_N_%4 == 0);
+    kernel_backward_101<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gr, gu);
+    kernel_backward_102<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gk);
+    kernel_backward_103<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gv);
+    kernel_backward_201<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, gy, gw);
+}
+void cuda_backward_fp32(int B, int T, int C, int H, fp32 *r, fp32 *k, fp32 *v, fp32 *w, fp32 *u, fp32 *gy, fp32 *gr, fp32 *gk, fp32 *gv, fp32 *gw, fp32 *gu)
 {
     assert(H*_N_ == C);
     assert(_N_%4 == 0);

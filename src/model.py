@@ -13,7 +13,7 @@ import lightning.pytorch as pl
 from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 from lightning.pytorch.strategies import DeepSpeedStrategy
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, ModelState
 from .cmix import ChannelMixState
 from .tmix_x052 import RWKV_Tmix_x052
 from .tmix_x060 import RWKV_Tmix_x060
@@ -159,34 +159,36 @@ class Block(nn.Module):
 
 
     @TCompile
-    def forward(self, x, kv_cache, last_state:BlockState):
+    def forward(self, x, last_model_state:ModelState):
         args = self.args
 
         B, T, C = x.size()
         # if self.layer_id == 0:
         #     x = self.ln0(x)
 
-        att_x = self.ln1(x)
-        if len(kv_cache.shape) > 0:
-            att_x = (att_x, kv_cache)
+        last_block_state = last_model_state.block_states[self.layer_id]
+
+        # if len(kv_cache.shape) > 0:
+        #     att_x = (att_x, kv_cache)
         if not self.parallel:
             if self.att is not None:
-                dx, time_mix_state = self.att(att_x, last_state.time_mix_state)
+                dx, time_mix_state = self.att(self.ln1(x), last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
             elif self.poco is not None:
-                dx, time_mix_state = self.poco(att_x, last_state.time_mix_state)
+                time_mix_state = last_block_state.time_mix_state
+                dx, time_mix_state = self.poco(self.ln1(x), last_model_state.kv_cache, last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
             else:
-                time_mix_state = last_state.time_mix_state
+                time_mix_state = last_block_state.time_mix_state
             if self.ln2 is not None and self.ffn is not None:
-                dx, channel_mix_state = self.ffn(self.ln2(x), last_state.channel_mix_state)
+                dx, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
                 x = self.drop0(x + dx)
             else:
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
-            dx_att, time_mix_state = self.att(att_x, last_state.time_mix_state)
-            dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_state.channel_mix_state)
+            dx_att, time_mix_state = self.att(self.ln1(x), last_block_state.time_mix_state)
+            dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
             x = self.drop0(x + dx_att + dx_ffn)
 
         return x, BlockState(time_mix_state, channel_mix_state)
@@ -338,7 +340,7 @@ class RWKV(pl.LightningModule):
             return cfg.get("offload_optimizer") or cfg.get("offload_param")
         return False
 
-    def forward(self, idx, last_block_states:list[BlockState]|None = None):
+    def forward(self, idx, last_model_state:ModelState|None = None):
         args = self.args
         B, T = idx.size()
         assert T <= args.ctx_len, "Cannot forward, model ctx_len is exhausted."
@@ -347,34 +349,44 @@ class RWKV(pl.LightningModule):
 
         dtype = x.dtype#torch.get_autocast_gpu_dtype()
 
+        total_n_layer = args.n_layer
+
         # FIXME - might need to be true later for BPTT
-        requires_grad = True
-        if last_block_states is None:
+        requires_grad = self.training
+        if last_model_state is None:
             #dtype = x.dtype
-            last_block_states = [
+            last_model_state = ModelState()
+
+            wkv_state_shape = [B, args.dim_att//args.head_size_a, args.head_size_a, args.head_size_a]
+            last_model_state.block_states = [
                 BlockState(
                     TimeMixState(
-                        torch.zeros([B, args.dim_att//args.head_size_a, args.head_size_a, args.head_size_a], dtype=dtype, device=idx.device, requires_grad=requires_grad), 
+                        torch.zeros(wkv_state_shape, dtype=dtype, device=idx.device, requires_grad=requires_grad), 
                         torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                     ), 
                     ChannelMixState(
                         torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                     )
                 ) 
-                for layer_id in range(args.n_layer)
+                for layer_id in range(total_n_layer)
             ]
+            if self.is_poco:
+                # FIXME - need max ctx len not just training ctx_len?
+                kv_cache_len = 0# if self.training else self.args.ctx_len
+                last_model_state.kv_cache = torch.zeros([B, kv_cache_len, args.dim_att * 2], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                last_model_state.embed_state = torch.zeros([B, args.n_embd], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                for layer_id in range(get_first_poco_layer_id(args.n_layer), total_n_layer):
+                    last_model_state.block_states[layer_id].time_mix_state.wkv_state = torch.zeros([B, 0, args.dim_att * 2], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
         x = self.blocks[0].ln0(x)
         x_original = x
         
-        mt = os.environ["RWKV_MODEL_TYPE"]
-        next_block_states = []
-        kv_cache = torch.tensor(0, device=x.device, dtype=x.dtype)
-        layer_id = -1
-        for last_block_state, block in zip(last_block_states, self.blocks):
-            layer_id += 1            
-            block_args = [x, kv_cache, last_block_state]
+        next_model_state = ModelState()
+        for layer_id in range(total_n_layer):
+            block = self.blocks[layer_id]
+
+            block_args = [x, last_model_state]
             if self.training and args.grad_cp == 1:
                 if "deepspeed" in args.strategy:
                     x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
@@ -384,20 +396,32 @@ class RWKV(pl.LightningModule):
                 x, next_block_state = block(*block_args)
             if self.is_poco and layer_id == get_first_poco_layer_id(args.n_layer) - 1:
                 # FIXME - we really need a separate shift state now for the kv_cache
-                dx_original_prev = F.pad(x_original, (0, 0, 1, -1)) - x_original
+                #dx_original_prev = F.pad(x_original, (0, 0, 1, -1)) - x_original                
+                dx_original_prev = torch.concat((last_model_state.embed_state.unsqueeze(1), x_original[:, :-1]), dim=1) - x_original
+                next_model_state.embed_state = x_original[:, -1].clone()
+                
                 xxx = x_original + dx_original_prev * self.time_maa_x
                 xxx = torch.tanh(xxx @ self.time_maa_w1) @ self.time_maa_w2
                 mtoken = xxx
                 xtoken = x_original + dx_original_prev * (self.time_maa_token + mtoken)
 
-                compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
-                kv_cache = rms_norm(self.w_kv_cache_b(rms_norm(torch.cat([xtoken, compressed_kv_cache],dim=-1))))
+                new_compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
+                new_kv_cache = rms_norm(self.w_kv_cache_b(rms_norm(torch.cat([xtoken, new_compressed_kv_cache],dim=-1))))
+                # FIXME - preallocate and edit in place instead?
+                if self.training:
+                    # FIXME - cat instead?
+                    last_model_state.kv_cache = new_kv_cache
+                else:
+                    last_model_state.kv_cache = torch.cat([last_model_state.kv_cache, new_kv_cache], dim=-2)
+                    next_model_state.kv_cache = last_model_state.kv_cache
+                last_model_state.seq_pos = last_model_state.seq_pos + T
+                next_model_state.seq_pos = last_model_state.seq_pos
 
-            next_block_states.append(next_block_state)
+            next_model_state.block_states.append(next_block_state)
 
         x = self.ln_out(x)
         x = self.head(x)
-        return x, next_block_states
+        return x, next_model_state
 
     def _get_loss_logits_preds(self, batch, batch_idx):
         x, y = batch
