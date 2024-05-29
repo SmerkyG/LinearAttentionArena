@@ -159,7 +159,7 @@ class Block(nn.Module):
 
 
     @TCompile
-    def forward(self, x, last_model_state:ModelState):
+    def forward(self, x, kv_cache, last_model_state:ModelState):
         args = self.args
 
         B, T, C = x.size()
@@ -176,7 +176,7 @@ class Block(nn.Module):
                 x = self.drop0(x + dx)
             elif self.poco is not None:
                 time_mix_state = last_block_state.time_mix_state
-                dx, time_mix_state = self.poco(self.ln1(x), last_model_state.kv_cache, last_block_state.time_mix_state)
+                dx, time_mix_state = self.poco(self.ln1(x), kv_cache, last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
@@ -375,18 +375,18 @@ class RWKV(pl.LightningModule):
                 kv_cache_len = 0# if self.training else self.args.ctx_len
                 last_model_state.kv_cache = torch.zeros([B, kv_cache_len, args.dim_att * 2], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                 last_model_state.embed_state = torch.zeros([B, args.n_embd], dtype=dtype, device=idx.device, requires_grad=requires_grad)
-                for layer_id in range(get_first_poco_layer_id(args.n_layer), total_n_layer):
-                    last_model_state.block_states[layer_id].time_mix_state.wkv_state = torch.zeros([B, 0, args.dim_att * 2], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
         x = self.blocks[0].ln0(x)
         x_original = x
         
+        kv_cache = last_model_state.kv_cache
+        embed_state = last_model_state.embed_state
         next_model_state = ModelState()
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
-            block_args = [x, last_model_state]
+            block_args = [x, kv_cache, last_model_state]
             if self.training and args.grad_cp == 1:
                 if "deepspeed" in args.strategy:
                     x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
@@ -397,8 +397,8 @@ class RWKV(pl.LightningModule):
             if self.is_poco and layer_id == get_first_poco_layer_id(args.n_layer) - 1:
                 # FIXME - we really need a separate shift state now for the kv_cache
                 #dx_original_prev = F.pad(x_original, (0, 0, 1, -1)) - x_original                
-                dx_original_prev = torch.concat((last_model_state.embed_state.unsqueeze(1), x_original[:, :-1]), dim=1) - x_original
-                next_model_state.embed_state = x_original[:, -1].clone()
+                dx_original_prev = torch.concat((embed_state.unsqueeze(1), x_original[:, :-1]), dim=1) - x_original
+                embed_state = x_original[:, -1].clone()
                 
                 xxx = x_original + dx_original_prev * self.time_maa_x
                 xxx = torch.tanh(xxx @ self.time_maa_w1) @ self.time_maa_w2
@@ -407,20 +407,24 @@ class RWKV(pl.LightningModule):
 
                 new_compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
                 new_kv_cache = rms_norm(self.w_kv_cache_b(rms_norm(torch.cat([xtoken, new_compressed_kv_cache],dim=-1))))
+
                 # FIXME - preallocate and edit in place instead?
                 if self.training:
                     # FIXME - cat instead?
-                    last_model_state.kv_cache = new_kv_cache
+                    kv_cache = new_kv_cache
+                    pass
                 else:
-                    last_model_state.kv_cache = torch.cat([last_model_state.kv_cache, new_kv_cache], dim=-2)
-                    next_model_state.kv_cache = last_model_state.kv_cache
-                last_model_state.seq_pos = last_model_state.seq_pos + T
-                next_model_state.seq_pos = last_model_state.seq_pos
+                    kv_cache = torch.cat([kv_cache, new_kv_cache], dim=-2)
+                # next_model_state.kv_cache = last_model_state.kv_cache
+                # last_model_state.seq_pos = last_model_state.seq_pos + T
+                # next_model_state.seq_pos = last_model_state.seq_pos
 
             next_model_state.block_states.append(next_block_state)
 
         x = self.ln_out(x)
         x = self.head(x)
+        next_model_state.kv_cache = kv_cache
+        next_model_state.embed_state = embed_state
         return x, next_model_state
 
     def _get_loss_logits_preds(self, batch, batch_idx):
