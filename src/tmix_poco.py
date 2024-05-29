@@ -87,11 +87,15 @@ class RWKV_Tmix_poco(MyModule):
 
             self.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
+
+            self.time_maa_v_cache = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
             D_MIX_LORA = 32
-            self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*3))
-            self.time_maa_w2 = nn.Parameter(torch.zeros(3, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
+            self.time_maa_q_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA))
+            self.time_maa_q_w2 = nn.Parameter(torch.empty(D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
+            self.time_maa_kv_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*2))
+            self.time_maa_kv_w2 = nn.Parameter(torch.empty(2, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
         self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
@@ -115,14 +119,18 @@ class RWKV_Tmix_poco(MyModule):
         dxprev = torch.concat((last_time_mix_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
-        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, self.time_maa_w2.size(0), -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_w2).view(self.time_maa_w2.size(0), B, T, C)
+        mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
 
         k, v = kv_cache.chunk(2, dim=-1)
+        dv_prev = self.time_shift(v) - v
+        xxx = v + dv_prev * self.time_maa_v_cache
+        xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*T, self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_kv_w2).view(self.time_maa_kv_w2.size(0), B, T, C)
+        mk, mv = xxx.unbind(dim=0)
+
         dkprev = self.time_shift(k) - k
         dvprev = self.time_shift(v) - v
 
-        mq, mk, mv = xxx.unbind(dim=0)
         xq = x + dxprev * (self.time_maa_r + mq)
         k = k + dkprev * (self.time_maa_k + mk)
         v = v + dvprev * (self.time_maa_v + mv)
