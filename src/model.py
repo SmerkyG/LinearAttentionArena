@@ -370,10 +370,10 @@ class RWKV(pl.LightningModule):
                 ) 
                 for layer_id in range(total_n_layer)
             ]
+            last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
             if self.is_poco:
                 # FIXME - need max ctx len not just training ctx_len?
                 k_cache_len = 0# if self.training else self.args.ctx_len
-                last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
                 last_model_state.k_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                 last_model_state.embed_state = torch.zeros([B, args.n_embd], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
