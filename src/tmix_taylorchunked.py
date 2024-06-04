@@ -47,7 +47,7 @@ class RWKV_Tmix_taylorchunked(MyModule):
         self.ln_k = nn.LayerNorm(self.head_size)
 
     @MyFunction
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x, x_original, last_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
         Q = C // H

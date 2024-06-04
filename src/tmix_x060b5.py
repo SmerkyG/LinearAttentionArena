@@ -73,7 +73,7 @@ class RWKV_Tmix_x060b5(MyModule):
         self.ln_x = nn.LayerNorm(args.dim_att)
 
     @MyFunction
-    def forward(self, x_in, last_state:TimeMixState):
+    def forward(self, x_in, x_original, last_state:TimeMixState):
         B, T, C = x_in.size()
 
         #xxx = x + dxprev * self.time_maa_x

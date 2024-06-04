@@ -84,7 +84,7 @@ class RWKV_Tmix_x060bbswa(MyModule):
         self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
     @MyFunction
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x, x_original, last_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
         K = C // H

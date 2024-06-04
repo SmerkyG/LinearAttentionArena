@@ -97,8 +97,11 @@ class RWKV_Tmix_poco(MyModule):
             self.time_maa_kv_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*2))
             self.time_maa_kv_w2 = nn.Parameter(torch.empty(2, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
+            D_VALUE_LORA = 64
+            self.time_value_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
+            self.time_value_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
         self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        #self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_r = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
         self.ln_v = nn.LayerNorm(args.dim_att)
@@ -109,7 +112,7 @@ class RWKV_Tmix_poco(MyModule):
         #self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
     @MyFunction
-    def forward(self, x, kv_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, x_original, k_cache, last_time_mix_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -121,20 +124,25 @@ class RWKV_Tmix_poco(MyModule):
         xxx = x + dxprev * self.time_maa_x
         mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
 
-        k, v = kv_cache.chunk(2, dim=-1)
-        dv_prev = self.time_shift(v) - v
-        xxx = v + dv_prev * self.time_maa_v_cache
-        xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*v.size(1), self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_kv_w2).view(self.time_maa_kv_w2.size(0), B, v.size(1), C)
+        #k, v = kv_cache.chunk(2, dim=-1)
+        k = k_cache
+        #v = x_original
+        dx_original_prev = self.time_shift(x_original) - x_original
+        xxx = x_original + dx_original_prev * self.time_maa_v_cache
+        xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*x_original.size(1), self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_kv_w2).view(self.time_maa_kv_w2.size(0), B, x_original.size(1), C)
         mk, mv = xxx.unbind(dim=0)
 
         dkprev = self.time_shift(k) - k
-        dvprev = self.time_shift(v) - v
 
         xq = x + dxprev * (self.time_maa_r + mq)
         k = k + dkprev * (self.time_maa_k + mk)
-        v = v + dvprev * (self.time_maa_v + mv)
+        xv = x_original + dx_original_prev * (self.time_maa_v + mv)
+        #xv2 = x_original + dx_original_prev * (self.time_maa_v2 + mv2)
         
+        v = xv + torch.tanh(xv @ self.time_value_w1) @ self.time_value_w2
+        #v2 = torch.tanh(xv2 @ self.time_value2_w1) @ self.time_value2_w2
+       
         q = self.receptance(xq)
         
         q = self.ln_r(q)
@@ -144,19 +152,24 @@ class RWKV_Tmix_poco(MyModule):
         q = q.view(B,-1,H,K).transpose(1,2)
         k = k.view(B,-1,H,K).transpose(1,2)
         v = v.view(B,-1,H,V).transpose(1,2)
+        #v2 = v2.view(B,-1,H,V).transpose(1,2)
 
         # causality MUST be enforced for longer runs because even though we won't use the results at t-1 the next chanmix WILL for its tokenshift!
         # this is also why we must allow through the last MANY time-steps if we have that many, so chanmix receives both of these and can lerp between those results!
         # the results can tokenshift their way forward up to one full timestep each layer via chanmix, so we really have to keep up to all N poco layers around
 
         x = nn.functional.scaled_dot_product_attention(q,k,v,is_causal=q.size(-2)>1)
+        #x = nn.functional.scaled_dot_product_attention(q,k,v,is_causal=False,attn_mask=self.bias_mask(q))
+
+        #x = x + v2
+        #x = F.softmax(q @ k.mT + torch.full((T, T), float('-inf'), dtype=x.dtype, device=x.device).triu(1), dim=-1) @ v + v2
 
         x = x.transpose(1,2).reshape(B,-1,C)
        
         x = self.ln_x(x)
         #x = F.layer_norm(x.float(), self.ln_x.normalized_shape, self.ln_x.weight.float(), self.ln_x.bias.float()).to(x.dtype)
 
-        x = self.output(x)
+        #x = self.output(x)
 
         return x, TimeMixState(last_time_mix_state.wkv_state, shift_state)
 

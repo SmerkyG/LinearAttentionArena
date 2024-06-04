@@ -372,21 +372,21 @@ class RWKV(pl.LightningModule):
             ]
             if self.is_poco:
                 # FIXME - need max ctx len not just training ctx_len?
-                kv_cache_len = 0# if self.training else self.args.ctx_len
-                last_model_state.kv_cache = torch.zeros([B, kv_cache_len, args.dim_att * 2], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                k_cache_len = 0# if self.training else self.args.ctx_len
+                last_model_state.kv_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                 last_model_state.embed_state = torch.zeros([B, args.n_embd], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
         x = self.blocks[0].ln0(x)
         x_original = x
         
-        kv_cache = last_model_state.kv_cache
+        k_cache = last_model_state.kv_cache
         embed_state = last_model_state.embed_state
         next_model_state = ModelState()
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
-            block_args = [x, kv_cache, last_model_state]
+            block_args = [x, x_original, k_cache, last_model_state]
             if self.training and args.grad_cp == 1:
                 if "deepspeed" in args.strategy:
                     x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
@@ -405,16 +405,20 @@ class RWKV(pl.LightningModule):
                 mtoken = xxx
                 xtoken = x_original + dx_original_prev * (self.time_maa_token + mtoken)
 
-                new_compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
-                new_kv_cache = rms_norm(self.w_kv_cache_b(rms_norm(torch.cat([xtoken, new_compressed_kv_cache],dim=-1))))
+                #new_compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
+                #new_kv_cache = rms_norm(self.w_kv_cache_b(rms_norm(torch.cat([xtoken, new_compressed_kv_cache],dim=-1))))
+                new_compressed_k_cache = self.w_k_cache_a(torch.cat([xtoken, x],dim=-1))
+                new_k_cache = rms_norm(self.w_k_cache_b(rms_norm(torch.cat([xtoken, new_compressed_k_cache],dim=-1))))
+                #new_kv_cache = torch.cat([new_k_cache, xtoken], dim=-1)
+                #new_kv_cache = rms_norm(self.w_kv_cache(rms_norm(xtoken)))
 
                 # FIXME - preallocate and edit in place instead?
                 if self.training:
                     # FIXME - cat instead?
-                    kv_cache = new_kv_cache
+                    k_cache = new_k_cache
                     pass
                 else:
-                    kv_cache = torch.cat([kv_cache, new_kv_cache], dim=-2)
+                    k_cache = torch.cat([k_cache, new_k_cache], dim=-2)
                 # next_model_state.kv_cache = last_model_state.kv_cache
                 # last_model_state.seq_pos = last_model_state.seq_pos + T
                 # next_model_state.seq_pos = last_model_state.seq_pos
@@ -423,7 +427,7 @@ class RWKV(pl.LightningModule):
 
         x = self.ln_out(x)
         x = self.head(x)
-        next_model_state.kv_cache = kv_cache
+        next_model_state.kv_cache = k_cache
         next_model_state.embed_state = embed_state
         return x, next_model_state
 

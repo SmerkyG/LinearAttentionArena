@@ -1,11 +1,12 @@
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
 from .tmix import TimeMixState
 
-class RWKV_Tmix_x060b2(MyModule):
+class RWKV_Tmix_x060b3(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -23,13 +24,6 @@ class RWKV_Tmix_x060b2(MyModule):
                 ddd[0, 0, i] = i / args.n_embd
 
             self.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
-            # self.time_maa_all = nn.Parameter(torch.cat([
-            #     1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0), # r
-            #     1.0 - torch.pow(ddd, ratio_1_to_almost0), # k
-            #     1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v
-            #     1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v2
-            #     1.0 - torch.pow(ddd, ratio_1_to_almost0), # w
-            # ]))
             self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
             self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
@@ -39,6 +33,7 @@ class RWKV_Tmix_x060b2(MyModule):
             self.time_maa_w2 = nn.Parameter(torch.zeros(5, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
             self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*self.time_maa_w2.size(0)))
 
+            #decay_speed = torch.ones(args.dim_att) * 2
             decay_speed = torch.ones(args.dim_att)
             for n in range(args.dim_att):
                 decay_speed[n] = -6 + 5 * (n / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1)
@@ -47,8 +42,11 @@ class RWKV_Tmix_x060b2(MyModule):
             self.time_decay_w1 = nn.Parameter(torch.zeros(args.n_embd, D_DECAY_LORA))
             self.time_decay_w2 = nn.Parameter(torch.zeros(D_DECAY_LORA, args.dim_att).uniform_(-0.01, 0.01))
 
-            self.time_value2_w1 = nn.Parameter(torch.zeros(args.n_embd, D_DECAY_LORA))
-            self.time_value2_w2 = nn.Parameter(torch.zeros(D_DECAY_LORA, args.dim_att).uniform_(-0.01, 0.01))
+            D_VALUE_LORA = 64
+            self.time_value_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
+            self.time_value_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
+            self.time_value2_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
+            self.time_value2_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
 
             tmp = torch.zeros(args.dim_att)
             for n in range(args.dim_att):
@@ -59,7 +57,6 @@ class RWKV_Tmix_x060b2(MyModule):
         self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
 
-        self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
@@ -85,9 +82,11 @@ class RWKV_Tmix_x060b2(MyModule):
         
         r = self.receptance(xr)
         k = self.key(xk)
-        v = self.value(xv)
-        v2 = self.value(xv2) + torch.tanh(xv2 @ self.time_value2_w1) @ self.time_value2_w2
+        v = xv + torch.tanh(xv @ self.time_value_w1) @ self.time_value_w2
+        v2 = xv2 + torch.tanh(xv2 @ self.time_value2_w1) @ self.time_value2_w2
+
         w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
+
         k = k * (1 - (-w.exp()).exp())
         u = torch.zeros_like(self.time_faaaa)
 
@@ -96,5 +95,7 @@ class RWKV_Tmix_x060b2(MyModule):
         y = y + v2
 
         y = self.ln_x(y)
+        #y = F.layer_norm(y.float(), self.ln_x.normalized_shape, self.ln_x.weight.float(), self.ln_x.bias.float()).to(y.dtype)
+
         y = self.output(y)
         return y, TimeMixState(wkv_state, shift_state)
