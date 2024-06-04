@@ -3,7 +3,8 @@ import torch
 class ModelState:
     def __init__(self):
         self.seq_pos = 0
-        self.kv_cache = torch.tensor([])
+        self.input_tokens_cache = torch.tensor([])
+        self.k_cache = torch.tensor([])
         self.embed_state = torch.tensor([])
         self.block_states = []
 

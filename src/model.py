@@ -159,7 +159,7 @@ class Block(nn.Module):
 
 
     @TCompile
-    def forward(self, x, kv_cache, last_model_state:ModelState):
+    def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState):
         args = self.args
 
         B, T, C = x.size()
@@ -172,11 +172,11 @@ class Block(nn.Module):
         #     att_x = (att_x, kv_cache)
         if not self.parallel:
             if self.att is not None:
-                dx, time_mix_state = self.att(self.ln1(x), last_block_state.time_mix_state)
+                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
             elif self.poco is not None:
                 time_mix_state = last_block_state.time_mix_state
-                dx, time_mix_state = self.poco(self.ln1(x), kv_cache, last_block_state.time_mix_state)
+                dx, time_mix_state = self.poco(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
@@ -187,7 +187,7 @@ class Block(nn.Module):
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
-            dx_att, time_mix_state = self.att(self.ln1(x), last_block_state.time_mix_state)
+            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, last_block_state.time_mix_state)
             dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
             x = self.drop0(x + dx_att + dx_ffn)
 
@@ -373,20 +373,30 @@ class RWKV(pl.LightningModule):
             if self.is_poco:
                 # FIXME - need max ctx len not just training ctx_len?
                 k_cache_len = 0# if self.training else self.args.ctx_len
-                last_model_state.kv_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
+                last_model_state.k_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                 last_model_state.embed_state = torch.zeros([B, args.n_embd], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
         x = self.blocks[0].ln0(x)
         x_original = x
         
-        k_cache = last_model_state.kv_cache
+        if self.training:
+            x_original_cache = x
+        else:
+            x_original_cache = torch.cat( [
+                self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
+                x
+            ], dim=-2)
+        
+        k_cache = last_model_state.k_cache
         embed_state = last_model_state.embed_state
         next_model_state = ModelState()
+        next_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, idx], dim=-1)
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
-            block_args = [x, x_original, k_cache, last_model_state]
+            block_args = [x, x_original_cache, k_cache, last_model_state]
             if self.training and args.grad_cp == 1:
                 if "deepspeed" in args.strategy:
                     x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
@@ -427,7 +437,7 @@ class RWKV(pl.LightningModule):
 
         x = self.ln_out(x)
         x = self.head(x)
-        next_model_state.kv_cache = k_cache
+        next_model_state.k_cache = k_cache
         next_model_state.embed_state = embed_state
         return x, next_model_state
 
