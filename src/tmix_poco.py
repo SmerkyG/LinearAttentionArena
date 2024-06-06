@@ -10,6 +10,8 @@ import math
 
 from typing import Tuple
 
+from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
+
 def causal_bias_mask(T):
     return torch.full((T, T), float('-inf')).triu(1)
 
@@ -97,11 +99,14 @@ class RWKV_Tmix_poco(MyModule):
             self.time_maa_kv_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*2))
             self.time_maa_kv_w2 = nn.Parameter(torch.empty(2, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
-            D_VALUE_LORA = 64
+            D_VALUE_LORA = max(args.n_embd // 16, 64)
+            self.time_key_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
+            self.time_key_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
             self.time_value_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
             self.time_value_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
+
         self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        #self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_r = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
         self.ln_v = nn.LayerNorm(args.dim_att)
@@ -111,8 +116,11 @@ class RWKV_Tmix_poco(MyModule):
 
         #self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
+        self.angles = generate_binary_rotary_embedding(args.ctx_len * 2, args.dim_att // self.n_head)
+
+
     @MyFunction
-    def forward(self, x, x_original, k_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, x_original, kv_cache, last_time_mix_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -124,9 +132,7 @@ class RWKV_Tmix_poco(MyModule):
         xxx = x + dxprev * self.time_maa_x
         mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
 
-        #k, v = kv_cache.chunk(2, dim=-1)
-        k = k_cache
-        #v = x_original
+        k, v = kv_cache.chunk(2, dim=-1)
         dx_original_prev = self.time_shift(x_original) - x_original
         xxx = x_original + dx_original_prev * self.time_maa_v_cache
         xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*x_original.size(1), self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
@@ -134,14 +140,14 @@ class RWKV_Tmix_poco(MyModule):
         mk, mv = xxx.unbind(dim=0)
 
         dkprev = self.time_shift(k) - k
+        dvprev = self.time_shift(v) - v      
 
         xq = x + dxprev * (self.time_maa_r + mq)
         k = k + dkprev * (self.time_maa_k + mk)
-        xv = x_original + dx_original_prev * (self.time_maa_v + mv)
-        #xv2 = x_original + dx_original_prev * (self.time_maa_v2 + mv2)
+        v = v + dvprev * (self.time_maa_v + mv)
         
-        v = xv + torch.tanh(xv @ self.time_value_w1) @ self.time_value_w2
-        #v2 = torch.tanh(xv2 @ self.time_value2_w1) @ self.time_value2_w2
+        k = k + torch.tanh(k @ self.time_key_w1) @ self.time_key_w2
+        v = v + torch.tanh(v @ self.time_value_w1) @ self.time_value_w2
        
         q = self.receptance(xq)
         
@@ -152,7 +158,9 @@ class RWKV_Tmix_poco(MyModule):
         q = q.view(B,-1,H,K).transpose(1,2)
         k = k.view(B,-1,H,K).transpose(1,2)
         v = v.view(B,-1,H,V).transpose(1,2)
-        #v2 = v2.view(B,-1,H,V).transpose(1,2)
+
+        self.angles = self.angles.to(x.device)
+        q, k = apply_rotary_embedding(q, k, self.angles)
 
         # causality MUST be enforced for longer runs because even though we won't use the results at t-1 the next chanmix WILL for its tokenshift!
         # this is also why we must allow through the last MANY time-steps if we have that many, so chanmix receives both of these and can lerp between those results!
@@ -169,7 +177,7 @@ class RWKV_Tmix_poco(MyModule):
         x = self.ln_x(x)
         #x = F.layer_norm(x.float(), self.ln_x.normalized_shape, self.ln_x.weight.float(), self.ln_x.bias.float()).to(x.dtype)
 
-        #x = self.output(x)
+        x = self.output(x)
 
         return x, TimeMixState(last_time_mix_state.wkv_state, shift_state)
 
