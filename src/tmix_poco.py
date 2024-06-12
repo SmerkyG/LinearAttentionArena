@@ -105,9 +105,9 @@ class RWKV_Tmix_poco(MyModule):
             self.time_value_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
             self.time_value_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
 
-        self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.query = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
-        self.ln_r = nn.LayerNorm(args.dim_att)
+        self.ln_q = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
         self.ln_v = nn.LayerNorm(args.dim_att)
         self.ln_x = nn.LayerNorm(args.dim_att)
@@ -133,25 +133,25 @@ class RWKV_Tmix_poco(MyModule):
         mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
 
         k, v = kv_cache.chunk(2, dim=-1)
-        dx_original_prev = self.time_shift(x_original) - x_original
-        xxx = x_original + dx_original_prev * self.time_maa_v_cache
-        xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*x_original.size(1), self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_kv_w2).view(self.time_maa_kv_w2.size(0), B, x_original.size(1), C)
+        dv_prev = self.time_shift(v) - v
+        xxx = v + dv_prev * self.time_maa_v_cache
+        xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*x.size(1), self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_kv_w2).view(self.time_maa_kv_w2.size(0), B, x.size(1), C)
         mk, mv = xxx.unbind(dim=0)
 
         dkprev = self.time_shift(k) - k
         dvprev = self.time_shift(v) - v      
 
-        xq = x + dxprev * (self.time_maa_r + mq)
+        xq = x + dxprev * (self.time_maa_q + mq)
         k = k + dkprev * (self.time_maa_k + mk)
         v = v + dvprev * (self.time_maa_v + mv)
         
         k = k + torch.tanh(k @ self.time_key_w1) @ self.time_key_w2
-        v = v + torch.tanh(v @ self.time_value_w1) @ self.time_value_w2
-       
-        q = self.receptance(xq)
+        v = v + torch.tanh(v @ self.time_value_w1) @ self.time_value_w2     
+
+        q = self.query(xq)
         
-        q = self.ln_r(q)
+        q = self.ln_q(q)
         k = self.ln_k(k)
         v = self.ln_v(v)
 

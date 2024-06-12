@@ -245,8 +245,9 @@ class RWKV(pl.LightningModule):
         if self.is_poco:
             #self.ln_kv_cache = nn.LayerNorm(args.n_embd)
             #self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
-            self.w_kv_cache_a = nn.Linear(args.n_embd * 2, args.n_embd // 16, bias=False)
-            self.w_kv_cache_b = nn.Linear(args.n_embd // 16 + args.n_embd, 2 * args.dim_att, bias=False)
+            MLA_FACTOR = 16
+            self.w_kv_cache_a = nn.Linear(args.n_embd * 2, args.n_embd // MLA_FACTOR, bias=False)
+            self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, 2 * args.dim_att, bias=False)
 
             with torch.no_grad():
                 ddd = torch.ones(1, 1, args.n_embd)
@@ -374,7 +375,7 @@ class RWKV(pl.LightningModule):
             if self.is_poco:
                 # FIXME - need max ctx len not just training ctx_len?
                 k_cache_len = 0# if self.training else self.args.ctx_len
-                last_model_state.k_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                last_model_state.k_cache = torch.zeros([B, k_cache_len, 2 * args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                 last_model_state.embed_state = torch.zeros([B, args.n_embd], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
@@ -414,13 +415,11 @@ class RWKV(pl.LightningModule):
                 xxx = torch.tanh(xxx @ self.time_maa_w1) @ self.time_maa_w2
                 mtoken = xxx
                 xtoken = x_original + dx_original_prev * (self.time_maa_token + mtoken)
+                dxprev = torch.cat([next_block_state.channel_mix_state.shift_state.unsqueeze(1), x[:, :-1]], dim=-2) - x
+                xlerped = x + dxprev * (self.time_maa_token + mtoken)
+                new_compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, xlerped],dim=-1))
+                new_k_cache = rms_norm(self.w_kv_cache_b((torch.cat([xtoken, new_compressed_kv_cache],dim=-1))))
 
-                #new_compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, x],dim=-1))
-                #new_kv_cache = rms_norm(self.w_kv_cache_b(rms_norm(torch.cat([xtoken, new_compressed_kv_cache],dim=-1))))
-                new_compressed_k_cache = self.w_k_cache_a(torch.cat([xtoken, x],dim=-1))
-                new_k_cache = rms_norm(self.w_k_cache_b(rms_norm(torch.cat([xtoken, new_compressed_k_cache],dim=-1))))
-                #new_kv_cache = torch.cat([new_k_cache, xtoken], dim=-1)
-                #new_kv_cache = rms_norm(self.w_kv_cache(rms_norm(xtoken)))
 
                 # FIXME - preallocate and edit in place instead?
                 if self.training:
