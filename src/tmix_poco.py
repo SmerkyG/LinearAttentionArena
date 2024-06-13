@@ -132,8 +132,8 @@ class RWKV_Tmix_poco(MyModule):
         xxx = x + dxprev * self.time_maa_x
         mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
 
-        k, v = kv_cache.chunk(2, dim=-1)
-        #k = kv_cache
+        #k, v = kv_cache.chunk(2, dim=-1)
+        k = kv_cache
         # dv_prev = self.time_shift(v) - v
         # xxx = v + dv_prev * self.time_maa_v_cache
         # xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*x.size(1), self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
