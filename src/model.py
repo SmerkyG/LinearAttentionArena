@@ -417,7 +417,9 @@ class RWKV(pl.LightningModule):
                 xtoken = x_original + dx_original_prev * (self.time_maa_token + mtoken)
                 dxprev = torch.cat([next_block_state.channel_mix_state.shift_state.unsqueeze(1), x[:, :-1]], dim=-2) - x
                 xlerped = x + dxprev * (self.time_maa_token + mtoken)
-                new_compressed_kv_cache = self.w_kv_cache_a(torch.cat([xtoken, xlerped],dim=-1))
+                x_original_cache = xtoken
+
+                new_compressed_kv_cache = self.w_kv_cache_a(x)
                 new_k_cache = rms_norm(self.w_kv_cache_b((torch.cat([xtoken, new_compressed_kv_cache],dim=-1))))
 
 
@@ -469,11 +471,8 @@ class RWKV(pl.LightningModule):
             metric.update(margs)
 
         if self.trainer.is_global_zero:
+            self.log("loss", float(loss), prog_bar=True, on_step=True)#, rank_zero_only=True)
             if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
-                # stupid hack bc lightning expects us to log every actual step
-                for name, metric in self.metrics.items():
-                    metric_value = metric.compute()
-                    self.log(name, metric_value, on_step=True, rank_zero_only=True)
                 if (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
                     logdict = dict(tokens = self.get_real_tokens())
                     #str = f"epoch:{self.current_epoch} token:{self.all_nodes_tokens_processed:,} step:{batch_idx} "
