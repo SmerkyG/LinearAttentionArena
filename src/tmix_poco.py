@@ -159,8 +159,8 @@ class RWKV_Tmix_poco(MyModule):
         k = k.view(B,-1,H,K).transpose(1,2)
         v = v.view(B,-1,H,V).transpose(1,2)
 
-        self.angles = self.angles.to(x.device)
-        q, k = apply_rotary_embedding(q, k, self.angles)
+        #self.angles = self.angles.to(x.device)
+        #q, k = apply_rotary_embedding(q, k, self.angles)
 
         # causality MUST be enforced for longer runs because even though we won't use the results at t-1 the next chanmix WILL for its tokenshift!
         # this is also why we must allow through the last MANY time-steps if we have that many, so chanmix receives both of these and can lerp between those results!
