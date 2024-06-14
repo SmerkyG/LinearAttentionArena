@@ -246,8 +246,8 @@ class RWKV(pl.LightningModule):
             #self.ln_kv_cache = nn.LayerNorm(args.n_embd)
             #self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
             MLA_FACTOR = 16
-            self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, 2 * args.dim_att, bias=False)
             self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // MLA_FACTOR, bias=False)
+            self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
 
             with torch.no_grad():
                 ddd = torch.ones(1, 1, args.n_embd)
@@ -375,7 +375,7 @@ class RWKV(pl.LightningModule):
             if self.is_poco:
                 # FIXME - need max ctx len not just training ctx_len?
                 k_cache_len = 0# if self.training else self.args.ctx_len
-                last_model_state.k_cache = torch.zeros([B, k_cache_len, 2 * args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                last_model_state.k_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
                 last_model_state.embed_state = torch.zeros([B, args.n_embd], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
