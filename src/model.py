@@ -25,7 +25,8 @@ from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
 from .tmix_taylorchunked import RWKV_Tmix_taylorchunked
 from .tmix_attn import RWKV_Tmix_attn
-from .tmix_poco import RWKV_Tmix_poco
+from .tmix_goldfinch import RWKV_Tmix_goldfinch
+from .llama3 import Llama3_CMix, Llama3_Tmix
 
 from .cmix_x052 import RWKV_CMix_x052
 from .cmix_x060 import RWKV_CMix_x060
@@ -72,7 +73,7 @@ class BlockState:
         self.time_mix_state = time_mix_state
         self.channel_mix_state = channel_mix_state
 
-def get_first_poco_layer_id(n_layer):
+def get_first_goldfinch_layer_id(n_layer):
     return (2*n_layer)//3
 
 class Block(nn.Module):
@@ -110,8 +111,13 @@ class Block(nn.Module):
             ffnFactory = lambda: RWKV_CMix_x052(args, layer_id)
         elif mt.startswith('x060'):
             attFactory = lambda: RWKV_Tmix_x060(args, layer_id)
+        elif mt.startswith('gptalpha'):
+            attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
         elif mt.startswith('attn'):
             attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
+        elif mt.startswith('llama3'):
+            attFactory = lambda: Llama3_Tmix(args, layer_id)
+            ffnFactory = lambda: Llama3_CMix(args, layer_id)
         elif mt.startswith('mamba'):
             attFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
             ffnFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
@@ -130,18 +136,18 @@ class Block(nn.Module):
             if layer_id >= args.n_layer // 2:
                 attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
 
-        pocoFactory = lambda: None
-        self.is_poco = '_poco' in mt
-        if self.is_poco:
-            if layer_id >= get_first_poco_layer_id(args.n_layer) and layer_id < args.n_layer:
+        goldfinchFactory = lambda: None
+        self.is_goldfinch = '_goldfinch' in mt
+        if self.is_goldfinch:
+            if layer_id >= get_first_goldfinch_layer_id(args.n_layer) and layer_id < args.n_layer:
                 attFactory = lambda: None
-                if '_pocobha' in mt:
-                    pocoFactory = lambda: RWKV_Tmix_pocobha(args, layer_id)
+                if '_goldfinchbha' in mt:
+                    goldfinchFactory = lambda: RWKV_Tmix_goldfinchbha(args, layer_id)
                 else:
-                    pocoFactory = lambda: RWKV_Tmix_poco(args, layer_id)
+                    goldfinchFactory = lambda: RWKV_Tmix_goldfinch(args, layer_id)
 
         self.att = attFactory()
-        self.poco = pocoFactory()
+        self.goldfinch = goldfinchFactory()
         
         if ffnFactory is None:
             self.ln2 = None
@@ -174,9 +180,9 @@ class Block(nn.Module):
             if self.att is not None:
                 dx, time_mix_state = self.att(self.ln1(x), x_original_cache, last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
-            elif self.poco is not None:
+            elif self.goldfinch is not None:
                 time_mix_state = last_block_state.time_mix_state
-                dx, time_mix_state = self.poco(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state)
+                dx, time_mix_state = self.goldfinch(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
@@ -228,7 +234,8 @@ class RWKV(pl.LightningModule):
         assert args.dim_ffn % 32 == 0
 
         mt = os.environ["RWKV_MODEL_TYPE"]
-        self.is_poco = '_poco' in mt
+        self.is_goldfinch = '_goldfinch' in mt
+        self.is_llama = mt.startswith('llama3')
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
@@ -242,7 +249,7 @@ class RWKV(pl.LightningModule):
         else:
             self.drop0 = nn.Identity()
 
-        if self.is_poco:
+        if self.is_goldfinch:
             MLA_FACTOR = 16
             self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // MLA_FACTOR, bias=False)
             self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
@@ -357,6 +364,8 @@ class RWKV(pl.LightningModule):
             last_model_state = ModelState()
 
             wkv_state_shape = [B, args.dim_att//args.head_size_a, args.head_size_a, args.head_size_a]
+            if self.is_llama:
+                wkv_state_shape = [B, 0, args.dim_att * 2]
             last_model_state.block_states = [
                 BlockState(
                     TimeMixState(
@@ -370,7 +379,7 @@ class RWKV(pl.LightningModule):
                 for layer_id in range(total_n_layer)
             ]
             last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
-            if self.is_poco:
+            if self.is_goldfinch:
                 # FIXME - need max ctx len not just training ctx_len?
                 k_cache_len = 0# if self.training else self.args.ctx_len
                 last_model_state.k_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
@@ -401,7 +410,7 @@ class RWKV(pl.LightningModule):
                     x, next_block_state = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
             else:
                 x, next_block_state = block(*block_args)
-            if self.is_poco and layer_id == get_first_poco_layer_id(args.n_layer) - 1:
+            if self.is_goldfinch and layer_id == get_first_goldfinch_layer_id(args.n_layer) - 1:
                 new_compressed_kv_cache = self.w_kv_cache_a(x)
                 c = torch.cat([x_original, new_compressed_kv_cache],dim=-1)
                 new_k_cache = rms_norm(self.w_kv_cache_b(c))

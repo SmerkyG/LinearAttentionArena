@@ -50,6 +50,7 @@ class RMSNorm(nn.Module):
         return x / rms_norm.clamp(self.eps)
     
 def rms_norm(x, eps:float = 1e-8):
+    #return x * (x.square().mean(dim=-1, keepdim=True) + eps).rsqrt()
     rms_norm = (x.size(-1) ** -0.5) * x.norm(2, dim=-1, keepdim=True)
     return x / (rms_norm + eps)
 
@@ -69,7 +70,7 @@ def l2_norm(x, eps:float = 1e-8):
     # assumes that vector 'normally' has length 1, not length vec.size(-1)**0.5 (which would be if every component had an average absolute value of 1!)
     return x / (x.norm(2, dim=-1, keepdim=True) + eps)
 
-class RWKV_Tmix_poco(MyModule):
+class RWKV_Tmix_goldfinch(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -104,8 +105,12 @@ class RWKV_Tmix_poco(MyModule):
             self.time_key_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
             self.time_value_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
             self.time_value_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
+            #MLA_FACTOR = 16
+            #self.key = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
 
         self.query = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        #self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        #self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_q = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
@@ -118,7 +123,9 @@ class RWKV_Tmix_poco(MyModule):
 
         self.angles = generate_binary_rotary_embedding(args.ctx_len * 2, args.dim_att // self.n_head)
 
-
+    def shift_cat(self, x):
+        return torch.cat([x[:, :1], x[:, :-1]], dim=1)
+    
     @MyFunction
     def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState):
         B, T, C = x.size()
@@ -166,13 +173,9 @@ class RWKV_Tmix_poco(MyModule):
 
         # causality MUST be enforced for longer runs because even though we won't use the results at t-1 the next chanmix WILL for its tokenshift!
         # this is also why we must allow through the last MANY time-steps if we have that many, so chanmix receives both of these and can lerp between those results!
-        # the results can tokenshift their way forward up to one full timestep each layer via chanmix, so we really have to keep up to all N poco layers around
+        # the results can tokenshift their way forward up to one full timestep each layer via chanmix, so we really have to keep up to all N goldfinch layers around
 
         x = nn.functional.scaled_dot_product_attention(q,k,v,is_causal=q.size(-2)>1)
-        #x = nn.functional.scaled_dot_product_attention(q,k,v,is_causal=False,attn_mask=self.bias_mask(q))
-
-        #x = x + v2
-        #x = F.softmax(q @ k.mT + torch.full((T, T), float('-inf'), dtype=x.dtype, device=x.device).triu(1), dim=-1) @ v + v2
 
         x = x.transpose(1,2).reshape(B,-1,C)
        

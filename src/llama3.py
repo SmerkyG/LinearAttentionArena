@@ -61,7 +61,7 @@ class Llama3_Tmix(MyModule):
         self.angles = generate_rotary_embedding(args.ctx_len * 2, self.head_size)
 
     @MyFunction
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x, xo, last_timemix_state:TimeMixState):
         B, L, D = x.size()
         H = self.n_head
 
@@ -72,4 +72,4 @@ class Llama3_Tmix(MyModule):
         y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=True)
         y = y.transpose(1,2).reshape(B,L,D)
         y = self.wo(y)
-        return y, last_state
+        return y, TimeMixState(wkv_state, last_timemix_state.shift_state)
