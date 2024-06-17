@@ -12,7 +12,10 @@
 model_type=""
 layer=0
 emb=0
+dim_att=0
+dim_ffn=0
 ctx_len=512 # !!! change magic_prime if you change ctx_len !!!
+posemb='none'
 suffix=""
 lr_init="6e-4"
 lr_final="6e-5"
@@ -28,8 +31,11 @@ while [[ "$#" -gt 0 ]]; do
         --model_type) model_type="$2"; shift ;;
         --layer) layer="$2"; shift ;;
         --emb) emb="$2"; shift ;;
+        --dim_att) dim_att="$2"; shift ;;
+        --dim_ffn) dim_ffn="$2"; shift ;;
         --ctx_len) ctx_len="$2"; shift ;;
         --head_size) head_size="$2"; shift ;;
+        --posemb) posemb="$2"; shift ;;
         --lr_init) lr_init="$2"; shift ;;
         --lr_final) lr_final="$2"; shift ;;
         --n_gpu) n_gpu="$2"; shift ;;
@@ -46,6 +52,7 @@ done
 echo "model_type: $model_type"
 echo "layer: $layer"
 echo "emb: $emb"
+echo "posemb: $posemb"
 echo "lr_init: $lr_init"
 echo "lr_final: $lr_final"
 echo "ctx_len: $ctx_len"

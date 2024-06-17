@@ -37,6 +37,11 @@ if __name__ == "__main__":
     parser.add_argument("--dim_att", default=0, type=int)
     parser.add_argument("--dim_ffn", default=0, type=int)
 
+    parser.add_argument("--posemb", default='none', type=str) # 'rope' 'brope' 'alibi'
+
+    parser.add_argument("--use_one_minus_w", default=True, type=bool)
+    parser.add_argument("--use_v2", default=True, type=bool)
+
     parser.add_argument("--lr_init", default=6e-4, type=float)
     parser.add_argument("--lr_final", default=1e-5, type=float)
     parser.add_argument("--warmup_steps", default=-1, type=int)
@@ -104,10 +109,6 @@ if __name__ == "__main__":
     os.environ["RWKV_MODEL_TYPE"] = args.model_type
     os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
-    if args.dim_att <= 0:
-        args.dim_att = args.n_embd
-    if args.dim_ffn <= 0:
-        args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32)  # default = was 3.5x emb size, now 4x without gate
 
     args.run_name = f"{args.model_type} L{args.n_layer} D{args.n_embd} ctx{args.ctx_len} "
     if not os.path.exists(args.proj_dir):
@@ -205,6 +206,8 @@ if __name__ == "__main__":
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_tf32 = True
 
+    pl.seed_everything(args.seed_everything)
+
     ########################################################################################################
 
     from src.trainer import train_callback, generate_init_weight
@@ -276,6 +279,12 @@ if __name__ == "__main__":
     if "deepspeed" in args.strategy:
         trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = args.ds_bucket_mb * 1000 * 1000
         trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = args.ds_bucket_mb * 1000 * 1000
+
+    train_data = MyDataset(args)
+    if args.validation_data_file != "":
+        validation_data = MMapDataset(args.validation_data_file, args.ctx_len)
+    #validation_data = Subset(validation_data, range(1024)) # FIXME - hack to shorten val dataset
+    args.vocab_size = train_data.vocab_size
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
     train_data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=args.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)

@@ -5,6 +5,9 @@ from .cuda6 import RUN_CUDA_RWKV6
 
 from .tmix import TimeMixState
 
+from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
+from .norm import rms_norm
+
 class RWKV_Tmix_x060o3(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
@@ -50,7 +53,7 @@ class RWKV_Tmix_x060o3(MyModule):
         self.ln_x = nn.LayerNorm(args.dim_att)
 
     @MyFunction
-    def forward(self, x, last_state:TimeMixState):        
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
         K = C // H

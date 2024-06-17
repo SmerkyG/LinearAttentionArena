@@ -2,6 +2,7 @@ import torch
 from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda5 import RUN_CUDA_RWKV5
+from .tmix import TimeMixState
 
 class RWKV_Tmix_x052(MyModule):
     def __init__(self, args, layer_id):
@@ -54,7 +55,7 @@ class RWKV_Tmix_x052(MyModule):
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att)
 
     @MyFunction
-    def jit_func(self, x):
+    def jit_func(self, x, xo, kv_cache, last_state:TimeMixState):
         B, T, C = x.size()
         xx = self.time_shift(x) # Mix x with the previous timestep to produce xk, xv, xr
         xk = x * self.time_mix_k + xx * (1 - self.time_mix_k)

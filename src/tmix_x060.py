@@ -56,7 +56,7 @@ class RWKV_Tmix_x060(MyModule):
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
 
     @MyFunction
-    def forward(self, x, x_original, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
 

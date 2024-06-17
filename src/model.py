@@ -24,12 +24,15 @@ from .tmix_x060b5 import RWKV_Tmix_x060b5
 from .tmix_x060o3 import RWKV_Tmix_x060o3
 from .tmix_taylor import RWKV_Tmix_taylor
 from .tmix_taylorchunked import RWKV_Tmix_taylorchunked
-from .tmix_attn import RWKV_Tmix_attn
-from .tmix_goldfinch import RWKV_Tmix_goldfinch
+from .tmix_gptalpha import GPTAlpha_Tmix
+from .tmix_goco import GPTAlpha_Tmix_goco
+from .tmix_gocobha import GPTAlpha_Tmix_gocobha
 from .llama3 import Llama3_CMix, Llama3_Tmix
 
 from .cmix_x052 import RWKV_CMix_x052
 from .cmix_x060 import RWKV_CMix_x060
+from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
+from .norm import rms_norm
 
 import src.metrics as metrics
 
@@ -60,10 +63,6 @@ HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
 if 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
     from mamba_ssm import Mamba
 
-def rms_norm(x, eps:float = 1e-8):
-    rms_norm = (x.size(-1) ** -0.5) * x.norm(2, dim=-1, keepdim=True)
-    return x / (rms_norm + eps)
-
 ########################################################################################################
 # The RWKV Model with our blocks
 ########################################################################################################
@@ -73,11 +72,11 @@ class BlockState:
         self.time_mix_state = time_mix_state
         self.channel_mix_state = channel_mix_state
 
-def get_first_goldfinch_layer_id(n_layer):
+def get_first_cache_once_layer_id(n_layer):
     return (2*n_layer)//3
 
 class Block(nn.Module):
-    def __init__(self, args, layer_id):
+    def __init__(self, args, layer_id, angles, bias_mask):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
@@ -112,11 +111,9 @@ class Block(nn.Module):
         elif mt.startswith('x060'):
             attFactory = lambda: RWKV_Tmix_x060(args, layer_id)
         elif mt.startswith('gptalpha'):
-            attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
-        elif mt.startswith('attn'):
-            attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
+            attFactory = lambda: GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
         elif mt.startswith('llama3'):
-            attFactory = lambda: Llama3_Tmix(args, layer_id)
+            attFactory = lambda: Llama3_Tmix(args, layer_id, angles, bias_mask)
             ffnFactory = lambda: Llama3_CMix(args, layer_id)
         elif mt.startswith('mamba'):
             attFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
@@ -126,28 +123,24 @@ class Block(nn.Module):
             exit(0)
         
         if 'taylor' in mt:
-            if layer_id >= args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
+            if layer_id >= get_first_cache_once_layer_id(args.n_layer): #args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
                 if 'taylorchunked' in mt:
                     attFactory = lambda: RWKV_Tmix_taylorchunked(args, layer_id)
                 else:
                     attFactory = lambda: RWKV_Tmix_taylor(args, layer_id)
 
-        if '_attn' in mt:
-            if layer_id >= args.n_layer // 2:
-                attFactory = lambda: RWKV_Tmix_attn(args, layer_id)
-
-        goldfinchFactory = lambda: None
-        self.is_goldfinch = '_goldfinch' in mt
-        if self.is_goldfinch:
-            if layer_id >= get_first_goldfinch_layer_id(args.n_layer) and layer_id < args.n_layer:
-                attFactory = lambda: None
-                if '_goldfinchbha' in mt:
-                    goldfinchFactory = lambda: RWKV_Tmix_goldfinchbha(args, layer_id)
+        if '_gptalpha' in mt:
+            if layer_id >= get_first_cache_once_layer_id(args.n_layer):
+                attFactory = lambda: GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
+        self.is_cache_once = '_goco' in mt
+        if self.is_cache_once:
+            if layer_id >= get_first_cache_once_layer_id(args.n_layer) and layer_id < args.n_layer:
+                if '_gocobha' in mt:
+                    attFactory = lambda: GPTAlpha_Tmix_gocobha(args, layer_id, angles, bias_mask)
                 else:
-                    goldfinchFactory = lambda: RWKV_Tmix_goldfinch(args, layer_id)
+                    attFactory = lambda: GPTAlpha_Tmix_goco(args, layer_id, angles, bias_mask)
 
         self.att = attFactory()
-        self.goldfinch = goldfinchFactory()
         
         if ffnFactory is None:
             self.ln2 = None
@@ -178,11 +171,7 @@ class Block(nn.Module):
         #     att_x = (att_x, kv_cache)
         if not self.parallel:
             if self.att is not None:
-                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, last_block_state.time_mix_state)
-                x = self.drop0(x + dx)
-            elif self.goldfinch is not None:
-                time_mix_state = last_block_state.time_mix_state
-                dx, time_mix_state = self.goldfinch(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state)
+                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state)
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
@@ -217,6 +206,27 @@ class L2Wrap(torch.autograd.Function):
         return (grad_output, gy)
 
 
+def causal_bias_mask(T):
+    return torch.full((T, T), float('-inf')).triu(1)
+
+def alibi_mask(T, H):
+    bias = (torch.arange(T)[None, :] - torch.arange(T)[:, None]).float() # (T, T)
+    bias = bias + causal_bias_mask(T) # (T, T)
+    bias = bias.expand(H, -1, -1) # (H, T, T)
+    head_bias_slopes = (2 ** torch.linspace(-8.0/H, -8.0, H)).unsqueeze(-1).unsqueeze(-1) # (H, 1, 1)
+    bias = bias * head_bias_slopes # (H, T, T)
+    return bias
+
+class AlibiMask(nn.Module):
+    def __init__(self, block_size : int, n_heads : int, layer_id : int):
+        super().__init__()
+        T = block_size
+        H = n_heads
+        self.register_buffer('mask', alibi_mask(T, H))
+
+    def forward(self, q:Tensor):
+        return self.mask[:, :q.size(-2), :q.size(-2)]
+
 class RWKV(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
@@ -234,12 +244,23 @@ class RWKV(pl.LightningModule):
         assert args.dim_ffn % 32 == 0
 
         mt = os.environ["RWKV_MODEL_TYPE"]
-        self.is_goldfinch = '_goldfinch' in mt
+        self.is_cache_once = '_goco' in mt
         self.is_llama = mt.startswith('llama3')
+
+        self.angles = None
+        self.bias_mask = None
+        assert args.posemb in ['none', 'rope', 'brope', 'alibi'], 'unsupported setting for posemb'
+        match args.posemb:
+            case 'rope':
+                self.angles = generate_rotary_embedding(args.ctx_len * 2, args.head_size_a)
+            case 'brope':
+                self.angles = generate_binary_rotary_embedding(args.ctx_len * 2, args.head_size_a)
+            case 'alibi':
+                self.bias_mask = alibi_mask(args.ctx_len, self.n_kv_head)
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
-        self.blocks = nn.ModuleList([Block(args, i) for i in range(args.n_layer)])
+        self.blocks = nn.ModuleList([Block(args, i, self.angles, self.bias_mask) for i in range(args.n_layer)])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
@@ -249,7 +270,7 @@ class RWKV(pl.LightningModule):
         else:
             self.drop0 = nn.Identity()
 
-        if self.is_goldfinch:
+        if self.is_cache_once:
             MLA_FACTOR = 16
             self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // MLA_FACTOR, bias=False)
             self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
@@ -379,7 +400,7 @@ class RWKV(pl.LightningModule):
                 for layer_id in range(total_n_layer)
             ]
             last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
-            if self.is_goldfinch:
+            if self.is_cache_once:
                 # FIXME - need max ctx len not just training ctx_len?
                 k_cache_len = 0# if self.training else self.args.ctx_len
                 last_model_state.k_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
@@ -410,7 +431,7 @@ class RWKV(pl.LightningModule):
                     x, next_block_state = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
             else:
                 x, next_block_state = block(*block_args)
-            if self.is_goldfinch and layer_id == get_first_goldfinch_layer_id(args.n_layer) - 1:
+            if self.is_cache_once and layer_id == get_first_cache_once_layer_id(args.n_layer) - 1:
                 new_compressed_kv_cache = self.w_kv_cache_a(x)
                 c = torch.cat([x_original, new_compressed_kv_cache],dim=-1)
                 new_k_cache = rms_norm(self.w_kv_cache_b(c))

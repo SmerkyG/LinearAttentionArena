@@ -1,5 +1,6 @@
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
@@ -14,6 +15,9 @@ class RWKV_Tmix_x060b2(MyModule):
         self.head_size = args.head_size_a
         self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
+
+        self.use_one_minus_w = getattr(args, 'use_one_minus_w', True)
+        self.use_v2 = getattr(args, 'use_v2', True)
 
         with torch.no_grad():
             ratio_0_to_1 = layer_id / (args.n_layer - 1)  # 0 to 1
@@ -64,7 +68,7 @@ class RWKV_Tmix_x060b2(MyModule):
         self.ln_x = nn.LayerNorm(args.dim_att)
 
     @MyFunction
-    def forward(self, x, x_original, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
 
@@ -88,13 +92,23 @@ class RWKV_Tmix_x060b2(MyModule):
         v = self.value(xv)
         v2 = self.value(xv2) + torch.tanh(xv2 @ self.time_value2_w1) @ self.time_value2_w2
         w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
-        k = k * (1 - (-w.exp()).exp())
-        u = torch.zeros_like(self.time_faaaa)
+
+        if self.use_one_minus_w:
+            k = k * (1 - (-w.exp()).exp())
+
+        if self.use_v2:
+            u = torch.zeros_like(self.time_faaaa)
+        else:
+            u = self.time_faaaa
 
         wkv_state = last_state.wkv_state.clone()
         y = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
-        y = y + v2
+
+        if self.use_v2:
+            y = y + v2
 
         y = self.ln_x(y)
+        #y = F.layer_norm(y.float(), self.ln_x.normalized_shape, self.ln_x.weight.float(), self.ln_x.bias.float()).to(y.dtype)
+
         y = self.output(y)
         return y, TimeMixState(wkv_state, shift_state)
