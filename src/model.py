@@ -243,8 +243,6 @@ class RWKV(pl.LightningModule):
             self.drop0 = nn.Identity()
 
         if self.is_poco:
-            #self.ln_kv_cache = nn.LayerNorm(args.n_embd)
-            #self.w_kv_cache = nn.Linear(args.n_embd, 2 * args.dim_att, bias=False)
             MLA_FACTOR = 16
             self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // MLA_FACTOR, bias=False)
             self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
