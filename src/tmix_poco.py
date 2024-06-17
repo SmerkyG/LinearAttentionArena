@@ -120,7 +120,7 @@ class RWKV_Tmix_poco(MyModule):
 
 
     @MyFunction
-    def forward(self, x, xo, kv_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -131,15 +131,7 @@ class RWKV_Tmix_poco(MyModule):
 
         xxx = x + dxprev * self.time_maa_x
         mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
-
-        #k, v = kv_cache.chunk(2, dim=-1)
-        k = kv_cache
-        # dv_prev = self.time_shift(v) - v
-        # xxx = v + dv_prev * self.time_maa_v_cache
-        # xxx = torch.tanh(xxx @ self.time_maa_kv_w1).view(B*x.size(1), self.time_maa_kv_w2.size(0), -1).transpose(0, 1)
-        # xxx = torch.bmm(xxx, self.time_maa_kv_w2).view(self.time_maa_kv_w2.size(0), B, x.size(1), C)
-        # mk, mv = xxx.unbind(dim=0)
-        
+       
         xo = rms_norm(xo)
         dxo_prev = self.time_shift(xo) - xo
         xxx = xo + dxo_prev * self.time_maa_v_cache
@@ -147,8 +139,8 @@ class RWKV_Tmix_poco(MyModule):
         xxx = torch.bmm(xxx, self.time_maa_kv_w2).view(self.time_maa_kv_w2.size(0), B, xo.size(1), C)
         mk, mv = xxx.unbind(dim=0)
 
+        k = k_cache
         dkprev = self.time_shift(k) - k
-        #v = xm
         v = xo
         dvprev = self.time_shift(v) - v
 

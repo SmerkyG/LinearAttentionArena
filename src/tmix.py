@@ -5,7 +5,6 @@ class ModelState:
         self.seq_pos = 0
         self.input_tokens_cache = torch.tensor([])
         self.k_cache = torch.tensor([])
-        self.embed_state = torch.tensor([])
         self.block_states = []
 
 class TimeMixState:
