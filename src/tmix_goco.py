@@ -48,12 +48,8 @@ class GPTAlpha_Tmix_goco(MyModule):
             self.time_key_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
             self.time_value_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
             self.time_value_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
-            #MLA_FACTOR = 16
-            #self.key = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
 
         self.query = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        #self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        #self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_q = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
@@ -110,8 +106,9 @@ class GPTAlpha_Tmix_goco(MyModule):
         k = k.view(B,-1,H,K).transpose(1,2)
         v = v.view(B,-1,H,V).transpose(1,2)
 
-        #self.angles = self.angles.to(x.device)
-        #q, k = apply_rotary_embedding(q, k, self.angles)
+        if self.angles is not None:
+            self.angles = self.angles.to(x.device)
+            q, k = apply_rotary_embedding(q, k, self.angles)
 
         # causality MUST be enforced for longer runs because even though we won't use the results at t-1 the next chanmix WILL for its tokenshift!
         # this is also why we must allow through the last MANY time-steps if we have that many, so chanmix receives both of these and can lerp between those results!

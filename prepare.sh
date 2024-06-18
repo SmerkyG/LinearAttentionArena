@@ -16,6 +16,7 @@ model_type=""
 layer=0
 emb=0
 dim_att=0
+dim_ffn=0
 ctx_len=512 # !!! change magic_prime if you change ctx_len !!!
 suffix=""
 head_size=64
@@ -25,6 +26,8 @@ while [[ "$#" -gt 0 ]]; do
         --model_type) model_type="$2"; shift ;;
         --layer) layer="$2"; shift ;;
         --emb) emb="$2"; shift ;;
+        --dim_att) dim_att="$2"; shift ;;
+        --dim_ffn) dim_ffn="$2"; shift ;;
         --ctx_len) ctx_len="$2"; shift ;;
         --head_size) head_size="$2"; shift ;;
         --suffix) suffix="$2"; shift ;;
@@ -47,6 +50,7 @@ rm -f "$PROJ_DIR"/rwkv-{0..100}.pth # remove old checkpts in folder
 #
 # magic_prime = the largest 3n+2 prime smaller than datalen/ctxlen-1 (= 1498226207/512-1 = 2926222.06 in this case) = 2926181 in this case
 # 512 would be 2926181
+# 1024 would be 1463027
 # 2048 would be 731531
 # 4096 would be 365759
 # use https://www.dcode.fr/prime-numbers-search

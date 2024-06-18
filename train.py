@@ -39,8 +39,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--posemb", default='none', type=str) # 'rope' 'brope' 'alibi'
 
-    parser.add_argument("--use_one_minus_w", default=True, type=bool)
-    parser.add_argument("--use_v2", default=True, type=bool)
+    parser.add_argument("--use_one_minus_w", default=1, type=int)
+    parser.add_argument("--use_v2", default=1, type=int)
 
     parser.add_argument("--lr_init", default=6e-4, type=float)
     parser.add_argument("--lr_final", default=1e-5, type=float)

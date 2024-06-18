@@ -16,8 +16,8 @@ class RWKV_Tmix_x060b2(MyModule):
         self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
 
-        self.use_one_minus_w = getattr(args, 'use_one_minus_w', True)
-        self.use_v2 = getattr(args, 'use_v2', True)
+        self.use_one_minus_w = getattr(args, 'use_one_minus_w', 1)
+        self.use_v2 = getattr(args, 'use_v2', 1)
 
         with torch.no_grad():
             ratio_0_to_1 = layer_id / (args.n_layer - 1)  # 0 to 1
