@@ -15,22 +15,12 @@ from lightning.pytorch.strategies import DeepSpeedStrategy
 
 from .tmix import TimeMixState, ModelState
 from .cmix import ChannelMixState
-from .tmix_x052 import RWKV_Tmix_x052
-from .tmix_x060 import RWKV_Tmix_x060
-from .tmix_x060bbswa import RWKV_Tmix_x060bbswa
-from .tmix_x060b import RWKV_Tmix_x060b
-from .tmix_x060b2 import RWKV_Tmix_x060b2
-from .tmix_x060b5 import RWKV_Tmix_x060b5
-from .tmix_x060o3 import RWKV_Tmix_x060o3
-from .tmix_taylor import RWKV_Tmix_taylor
-from .tmix_taylorchunked import RWKV_Tmix_taylorchunked
-from .tmix_gptalpha import GPTAlpha_Tmix
-from .tmix_goco import GPTAlpha_Tmix_goco
-from .tmix_gocobha import GPTAlpha_Tmix_gocobha
-from .llama3 import Llama3_CMix, Llama3_Tmix
 
-from .cmix_x052 import RWKV_CMix_x052
-from .cmix_x060 import RWKV_CMix_x060
+import src
+
+import src.cmix_x052
+import src.cmix_x060
+
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
 
@@ -52,16 +42,20 @@ try:
 except:
     os.environ["RWKV_MODEL_TYPE"] = ''
 
+# import timemix modules based on model type name
+model_type = os.environ["RWKV_MODEL_TYPE"]
+for model_subtype in model_type.split('_'):
+    if not importlib.util.find_spec('src.tmix_' + model_subtype):
+        print(f"couldn't find src.tmix_.{model_subtype}, despite it being listed as part of the model name")
+        exit()
+    importlib.import_module('src.tmix_' + model_subtype)
+
+
 ########################################################################################################
 # CUDA Kernel
 ########################################################################################################
 
-from torch.utils.cpp_extension import load
-
 HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
-
-if 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
-    from mamba_ssm import Mamba
 
 ########################################################################################################
 # The RWKV Model with our blocks
@@ -89,35 +83,35 @@ class Block(nn.Module):
 
         self.parallel = False
 
-        ffnFactory = lambda: RWKV_CMix_x060(args, layer_id)
+        ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(args, layer_id)
 
         mt = os.environ["RWKV_MODEL_TYPE"]
         if 'parallel' in mt:
             self.parallel = True
 
         if mt.startswith('x060bbswa'):
-            attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id)
+            attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id, angles, bias_mask)
         elif mt.startswith('x060b5'):
-            attFactory = lambda: RWKV_Tmix_x060b5(args, layer_id)
+            attFactory = lambda: src.tmix_x060b5.RWKV_Tmix_x060b5(args, layer_id)
         elif mt.startswith('x060b2'):
-            attFactory = lambda: RWKV_Tmix_x060b2(args, layer_id)
+            attFactory = lambda: src.tmix_x060b2.RWKV_Tmix_x060b2(args, layer_id)
         elif mt.startswith('x060b'):
-            attFactory = lambda: RWKV_Tmix_x060b(args, layer_id)
+            attFactory = lambda: src.tmix_x060b.RWKV_Tmix_x060b(args, layer_id)
         elif mt.startswith('x060o3'):
-            attFactory = lambda: RWKV_Tmix_x060o3(args, layer_id)
+            attFactory = lambda: src.tmix_x060o3.RWKV_Tmix_x060o3(args, layer_id)
         elif mt.startswith('x052'):
-            attFactory = lambda: RWKV_Tmix_x052(args, layer_id)
-            ffnFactory = lambda: RWKV_CMix_x052(args, layer_id)
+            attFactory = lambda: src.tmix_x052.RWKV_Tmix_x052(args, layer_id)
+            ffnFactory = lambda: src.cmix_x052.RWKV_CMix_x052(args, layer_id)
         elif mt.startswith('x060'):
-            attFactory = lambda: RWKV_Tmix_x060(args, layer_id)
+            attFactory = lambda: src.tmix_x060.RWKV_Tmix_x060(args, layer_id)
         elif mt.startswith('gptalpha'):
-            attFactory = lambda: GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
+            attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
         elif mt.startswith('llama3'):
-            attFactory = lambda: Llama3_Tmix(args, layer_id, angles, bias_mask)
-            ffnFactory = lambda: Llama3_CMix(args, layer_id)
+            attFactory = lambda: src.llama3.Llama3_Tmix(args, layer_id, angles, bias_mask)
+            ffnFactory = lambda: src.llama3.Llama3_CMix(args, layer_id)
         elif mt.startswith('mamba'):
-            attFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
-            ffnFactory = lambda: Mamba(d_model=args.n_embd, d_state=16, d_conv=4, expand=2)
+            attFactory = lambda: src.tmix_mamba.Mamba(args, layer_id)
+            ffnFactory = lambda: src.tmix_mamba.MambaFFN(args, layer_id)
         else:
             print(f"Unsupported model type: {mt}")
             exit(0)
@@ -125,20 +119,23 @@ class Block(nn.Module):
         if 'taylor' in mt:
             if layer_id >= get_first_cache_once_layer_id(args.n_layer): #args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
                 if 'taylorchunked' in mt:
-                    attFactory = lambda: RWKV_Tmix_taylorchunked(args, layer_id)
+                    attFactory = lambda: src.tmix_taylorchunked.RWKV_Tmix_taylorchunked(args, layer_id)
                 else:
-                    attFactory = lambda: RWKV_Tmix_taylor(args, layer_id)
+                    attFactory = lambda: src.tmix_taylor.RWKV_Tmix_taylor(args, layer_id)
 
         if '_gptalpha' in mt:
             if layer_id >= get_first_cache_once_layer_id(args.n_layer):
-                attFactory = lambda: GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
+                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
+
         self.is_cache_once = '_goco' in mt
         if self.is_cache_once:
             if layer_id >= get_first_cache_once_layer_id(args.n_layer) and layer_id < args.n_layer:
                 if '_gocobha' in mt:
-                    attFactory = lambda: GPTAlpha_Tmix_gocobha(args, layer_id, angles, bias_mask)
+                    attFactory = lambda: src.tmix_gocobha.GPTAlpha_Tmix_gocobha(args, layer_id, angles, bias_mask)
                 else:
-                    attFactory = lambda: GPTAlpha_Tmix_goco(args, layer_id, angles, bias_mask)
+                    attFactory = lambda: src.tmix_goco.GPTAlpha_Tmix_goco(args, layer_id, angles, bias_mask)
+                if mt.startswith('mamba'):
+                    ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(args, layer_id)
 
         self.att = attFactory()
         
@@ -237,7 +234,7 @@ class RWKV(pl.LightningModule):
         if args.dim_att <= 0:
             args.dim_att = args.n_embd
         if args.dim_ffn <= 0:
-            args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32)  # default = was 3.5x emb size, now 4x without gate
+            args.dim_ffn = int((args.n_embd * 3.5) // 32 * 32)  # default = 3.5x emb size
 
         assert args.n_embd % 32 == 0
         assert args.dim_att % 32 == 0
@@ -295,6 +292,8 @@ class RWKV(pl.LightningModule):
         lr_2x = set()
         lr_3x = set()
         for n, p in self.named_parameters():
+            if not p.requires_grad:
+                continue
             if (("_w1" in n) or ("_w2" in n)) and (args.layerwise_lr > 0):
                 lr_1x.add(n)
             elif (("time_mix" in n) or ("time_maa" in n)) and (args.layerwise_lr > 0):
@@ -337,24 +336,16 @@ class RWKV(pl.LightningModule):
             print('3x', lr_3x, '\n')
 
         
-        if args.layerwise_lr > 0:
-            if args.train_stage == 2:
-                optim_groups = [
-                    {"params": [param_dict[n] for n in lr_1x], "weight_decay": 0.0, "my_lr_scale": 1.0},
-                    {"params": [param_dict[n] for n in lr_2x], "weight_decay": 0.0, "my_lr_scale": 5.0},
-                    {"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 5.0},
-                ]
-            else:
-                optim_groups = [
-                    {"params": [param_dict[n] for n in lr_1x], "weight_decay": 0.0, "my_lr_scale": 1.0},
-                    {"params": [param_dict[n] for n in lr_2x], "weight_decay": 0.0, "my_lr_scale": 2.0},
-                    {"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0},
-                ]
-        else:
-            optim_groups = [{"params": [param_dict[n] for n in lr_1x], "weight_decay": 0.0, "my_lr_scale": 1.0}]
+        optim_groups = [
+            {"params": [param_dict[n] for n in lr_1x], "weight_decay": 0.0, "my_lr_scale": 1.0, 'name':'lr_1x'},
+        ]
+        if len(lr_2x) > 0:
+            optim_groups += [{"params": [param_dict[n] for n in lr_2x], "weight_decay": 0.0, "my_lr_scale": 2.0, 'name':'lr_2x'}]
+        if len(lr_3x) > 0:
+            optim_groups += [{"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0, 'name':'lr_3x'}]
+        if len(lr_decay) > 0:
+            optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": args.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
 
-        if args.weight_decay > 0:
-            optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": args.weight_decay, "my_lr_scale": 1.0}]
         if self.deepspeed_offload:
             return DeepSpeedCPUAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adamw_mode=True, amsgrad=False)
         return FusedAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adam_w_mode=True, amsgrad=False)
@@ -566,7 +557,7 @@ class RWKV(pl.LightningModule):
             print(f"{s0.ljust(5)} {s1.ljust(5)} {s2.ljust(5)} {n}", end="")
 
             scale = 1.0
-            if len(p.shape) > 2 or "sin" in n or "cos" in n or "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
+            if "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
                 if 'ln_x' in n and n.endswith('.weight'):
                     layer_scale = (1+int(n.split('.')[1])) / self.args.n_layer
                     m[n] = (p * 0.0) + (layer_scale ** 0.7)
@@ -586,48 +577,55 @@ class RWKV(pl.LightningModule):
                     scale = 0.5
                 nn.init.orthogonal_(m[n], gain=scale)
                 print(f" [scale {scale}]")
-            else:
-                if 'mamba' in os.environ["RWKV_MODEL_TYPE"]:
-                    m[n] = p
-                    if '.out_proj.weight' in n:
-                        scale = 0
-                        nn.init.zeros_(m[n])
-                        print(f" [scale {scale}]")
-                    elif '.bias' in n:
-                        scale = 0
-                        nn.init.zeros_(m[n])
-                        print(f" [scale {scale}]")
-                    else:
-                        print()
-                else:
-                    assert n.endswith('.weight') # should always be true
-
-                    zero = [".att.output.", ".ffn.value.", ".ffn.receptance."]
-
-                    for kk in zero:
-                        if kk in n:
-                            scale = 0
-
-                    for kk in [".att.key."]:
-                        if kk in n:
-                            scale = 0.1
-                    for kk in [".att.gate."]:
-                        if kk in n:
-                            scale = 0.1
-
+            elif 'mamba' in os.environ["RWKV_MODEL_TYPE"] and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_first_cache_once_layer_id(self.args.n_layer))):
+                m[n] = p
+                if '.out_proj.weight' in n:
+                    scale = 0
+                    nn.init.zeros_(m[n])
                     print(f" [scale {scale}]")
+                    # nn.init.kaiming_uniform_(p, a=math.sqrt(5))
+                    # with torch.no_grad():
+                    #     n_residuals_per_layer = 2
+                    #     p /= math.sqrt(n_residuals_per_layer * self.args.n_layer)
+                    # print(f" [scale special residual]")
+                elif '.bias' in n:# and 'dt_proj.bias' not in n:
+                    scale = 0
+                    nn.init.zeros_(m[n])
+                    print(f" [scale {scale}]")
+                else:
+                    print()
+            elif len(p.shape) > 2 or "sin" in n or "cos" in n or "freqs" in n:
+                m[n] = p
+                print()
+            else:
+                assert n.endswith('.weight') # should always be true
 
-                    if self.args.accelerator.upper() == "GPU":
-                        m[n] = torch.empty((shape[0], shape[1]), device="cuda")
-                    else:
-                        m[n] = torch.empty((shape[0], shape[1]))
+                zero = [".att.output.", ".ffn.value.", ".ffn.receptance."]
 
-                    if scale == 0:
-                        nn.init.zeros_(m[n])
-                    elif scale < 0:
-                        nn.init.uniform_(m[n], a=scale, b=-scale)
-                    else:
-                        nn.init.orthogonal_(m[n], gain=scale)
+                for kk in zero:
+                    if kk in n:
+                        scale = 0
+
+                for kk in [".att.key."]:
+                    if kk in n:
+                        scale = 0.1
+                for kk in [".att.gate."]:
+                    if kk in n:
+                        scale = 0.1
+
+                print(f" [scale {scale}]")
+
+                if self.args.accelerator.upper() == "GPU":
+                    m[n] = torch.empty((shape[0], shape[1]), device="cuda")
+                else:
+                    m[n] = torch.empty((shape[0], shape[1]))
+
+                if scale == 0:
+                    nn.init.zeros_(m[n])
+                elif scale < 0:
+                    nn.init.uniform_(m[n], a=scale, b=-scale)
+                else:
+                    nn.init.orthogonal_(m[n], gain=scale)
 
             # if 'blocks.23' in n or 'blocks.' not in n:
             #     print(n, m[n])
@@ -647,250 +645,3 @@ class RWKV(pl.LightningModule):
         torch.cuda.empty_cache()
         return m
 
-# SimpleRWKV specific imports
-from transformers import PreTrainedTokenizerFast
-
-# Current script dir
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-SCRIPT_PARENT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '../'))
-
-# SimpleRWKV is a wrapper for RWKV that allows for simple usage of the model
-#
-# it is not meant to be highly performant, but rather a simple minimal way to run the RWKV trainer module
-# in inference mode, and can be used to validate the model trainer code / its changes
-class SimpleRWKV():
-
-    def __init__(
-            self,
-            model,
-            args,
-            ctx_len:int = 1024,
-            device:str = "cuda",
-            dtype_str:str = "fp32"
-        ):
-
-        self.model = model
-
-        # Log the mismatch dtype
-        dtype = torch.float32
-        if dtype_str == "16":
-            dtype = torch.float16
-        elif dtype_str == "bf16":
-            dtype = torch.bfloat16
-        elif dtype_str == "32":
-            dtype = torch.float32
-        else:
-            print("[SimpleRWKV] Warning: dtype mismatch, only fp16 bf16 fp32 is supported (for now)")
-
-        # Prepare the model config with the model path, and custom torch load
-        #model_config = {}
-        #model_config["load_model"] = model_path
-        #model_config["ctx_len"] = ctx_len
-
-        # FIXME
-        #model_config["version"] = "6.0"
-        #model_config["strict_loading"] = False
-        #model_config["num_experts"] = 8
-
-        # This feature depends on deepspeed
-        #model_config["grad_cp"] = False
-        # model_config["_torch_load_state"] = loaded_state
-
-        # Save the config settings
-        self.ctx_len = ctx_len
-        self.device = device
-
-        # Lets actually load the model
-        #trainer = Trainer(precision=dtype_str, accelerator='cuda', devices=1)
-        #fabric = Lightning.Fabric(precision=dtype_str, accelerator='cuda', devices=1)
-        #with fabric.init_module():
-        print("dtype of model itself started as ", self.model.ln_out.weight.dtype)
-
-        # Lets map it over to the respective device type
-        # and set it to run as eval/inference mode
-        print("Desired dtype", dtype)
-        self.model.to(dtype)
-        self.model.to(device)
-        self.model.eval()
-        if dtype != torch.float:
-            torch.set_autocast_gpu_dtype(dtype)
-
-        print("dtype of model itself became ", self.model.ln_out.weight.dtype)
-
-        # The tokenizer object values
-        self.fastTokenizer = None
-        self.worldTokenizer = None
-
-        # Setup the tokenizer
-        if args.vocab_size == 50277:
-            # Use the neox tokenizer
-            tokenizer_file = os.path.join(SCRIPT_DIR,"./dataflow/20B_tokenizer.json")
-            tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_file)
-            self.fastTokenizer = tokenizer
-        elif args.vocab_size == 65536:
-            # Use the world tokenizer
-            from .dataflow.trie_tokenizer import MT_TRIE_TOKENIZER
-            world_tokenizer = MT_TRIE_TOKENIZER(os.path.join(SCRIPT_DIR, "./dataflow/rwkv_vocab_v20230424.txt"))
-            self.worldTokenizer = world_tokenizer
-        else:
-            raise NotImplementedError(f"Unsupported vocab size ({vocab_size}) - custom tokenizer not supported")
-
-    # Encoding strings
-    def encode(self, text: str):
-        if self.worldTokenizer != None:
-            return self.worldTokenizer.encode(text)
-        return self.fastTokenizer.encode(text)
-
-    # Decoding strings
-    def decode(self, tokens: list):
-        if self.worldTokenizer != None:
-            return self.worldTokenizer.decode(tokens)
-        return self.fastTokenizer.decode(tokens)
-
-    # Forwarding logic, withoout torch._no_grad() context
-    def _forward(
-            self, tokens, 
-            stateObj = None,
-            all_logits = False
-        ):
-
-        logits_arr = None
-        token_len = len(tokens)
-
-        # The all_logits array, if requested
-        all_logits_arr = None
-
-        # For each token, process the state, in batches up to ctx_len
-        for i in range(0, token_len, self.ctx_len):
-            # Token set
-            token_set = tokens[i:i+self.ctx_len]
-
-            # Check if tokens are already tensors
-            batch_tokens = torch.tensor(
-                token_set, 
-                dtype=torch.long, device=self.device
-            ).unsqueeze(0)
-            
-            # Compute the logits and state
-            logits_arr, stateObj = self.model.forward(
-                batch_tokens, stateObj
-            )
-
-            # Build the all_logits array
-            if all_logits:
-                if all_logits_arr is None:
-                    all_logits_arr = logits_arr[0]
-                else:
-                    all_logits_arr = torch.cat([all_logits_arr, logits_arr[0]], dim=0)
-
-        # Return the logits and state
-        if all_logits:
-            return all_logits_arr, stateObj
-        else:
-            return logits_arr[0][-1], stateObj
-    
-    # Forwarding logic, with torch._no_grad() context
-    def forward(
-            self, tokens:list, 
-            stateObj = None,
-            all_logits = False
-        ):
-        with torch.no_grad():
-            return self._forward(tokens, stateObj, all_logits)
-
-    # Sampling logits
-    def sample_logits(
-            self, logits, 
-            prv_tokens=[0], 
-            temperature=1.0, top_p=0.9,
-            token_ban: list = []
-            ):
-        # Copy to CPU first
-        logits = logits.float().cpu()
-
-        # Max negative float
-        max_neg = -torch.finfo(torch.float).max
-
-        # Apply token ban
-        for x in token_ban:
-            logits[x] = max_neg
-        
-        # Remove NaNs from logits
-        for x in range(len(logits)):
-            if torch.isnan(logits[x]):
-                logits[x] = max_neg
-
-        # Handle sampling with temperature
-        if temperature > 0.0:
-            probs = F.softmax(logits, dim=-1)
-            sorted_probs = torch.sort(probs, descending=True)[0]
-            cumulative_probs = torch.cumsum(sorted_probs, dim=-1).float().cpu().numpy()
-            cutoff = float(sorted_probs[np.argmax(cumulative_probs > top_p)])
-            probs[probs < cutoff] = 0
-            if temperature != 1.0:
-                probs = probs.pow(1.0 / temperature)
-            out = torch.multinomial(probs, num_samples=1)[0]
-            return out
-        else: 
-            # Since the tokenizer sample does not support temp==0
-            # we handle this case ourself, by fining the top token
-            return torch.argmax(logits, dim=-1).item()
-
-    # Completion API
-    def completion(self, 
-            prompt, 
-            max_tokens: int = 32,
-            temperature: float = 1.0,
-            top_p: float = 0.9,
-            token_ban: list = [],
-            start_state = None,
-            stream_to_stdout: bool = False,
-        ):
-        # Encode the context, if its a string
-        if isinstance(prompt, str):
-            enc = self.encode(prompt)
-        # Check if the prompt is a list of tokens
-        elif isinstance(prompt, list):
-            enc = prompt
-        else:
-            raise ValueError("Prompt must be a string or a list of tokens")
-
-        # Keep track of the logits and state
-        logits = None
-        stateObj = start_state
-
-        # For each token, process the state
-        logits, stateObj = self.forward(enc, stateObj)
-
-        # # Garbage collect
-        # gc.collect()
-        # torch.cuda.empty_cache()
-
-        # Generate each token
-        out_tokens = []
-        for i in range(max_tokens):
-            ttt = self.sample_logits(
-                logits, 
-                # prv_tokens=full_tokens,
-                temperature=temperature, top_p=top_p,
-                token_ban=token_ban
-            )
-            
-            # Append the token
-            out_tokens.append(ttt)
-            # full_tokens.append(ttt)
-            if stream_to_stdout:
-                print(self.decode([ttt]), end="", flush=True)
-
-            # Perform the forward pass
-            logits, stateObj = self.forward([ttt], stateObj)
-
-        # Decode the tokens
-        out_str = self.decode(out_tokens)
-
-        # # Garbage collect
-        # gc.collect()
-        # torch.cuda.empty_cache()
-
-        # Return the output string, and state
-        return out_str, stateObj

@@ -213,12 +213,6 @@ if __name__ == "__main__":
     from src.trainer import train_callback, generate_init_weight
     from src.dataset import MyDataset, MMapDataset
 
-    train_data = MyDataset(args)
-    if args.validation_data_file != "":
-        validation_data = MMapDataset(args.validation_data_file, args.ctx_len)
-    #validation_data = Subset(validation_data, range(1024)) # FIXME - hack to shorten val dataset
-    args.vocab_size = train_data.vocab_size
-
     from src.model import RWKV
 
     if pl.__version__[0] == "2":
