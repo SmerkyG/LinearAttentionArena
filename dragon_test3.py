@@ -90,6 +90,7 @@ os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
 
 if len(sys.argv) < 4:
     print('usage:\n\tdragon_test.py MODEL_PATH MODEL_TYPE recurrent|nonrecurrent [seed]')
+    exit()
 
 
 # Setup the model
