@@ -66,6 +66,7 @@ args.n_embd=2048
 args.dim_att=0
 args.dim_ffn=0
 args.vocab_size=65536
+args.posemb = 'none'
 args.dropout=0.0
 args.layerwise_lr=True
 args.train_stage=2
@@ -87,10 +88,14 @@ os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
 os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
 
 
+if len(sys.argv) < 4:
+    print('usage:\n\tdragon_test.py MODEL_PATH MODEL_TYPE recurrent|nonrecurrent [seed]')
+
+
 # Setup the model
 import lightning as pl
 #trainer = pl.Trainer(precision=32)
-from src.model import SimpleRWKV, RWKV
+from src.model import RWKV
 #with trainer.init_module(empty_init=True):
 #    model = RWKV(args)
 
@@ -99,6 +104,10 @@ MODEL_PATH=sys.argv[1]
 model_path = MODEL_PATH
 
 recurrent = sys.argv[3] == 'recurrent'
+
+seed_everything = 1337
+if len(sys.argv) > 4:
+    seed_everything = int(sys.argv[4])
 
 print(f"########## Loading {model_path}... ##########")
 # try:
@@ -149,6 +158,8 @@ from utils import PIPELINE, PIPELINE_ARGS
 #pipeline = PIPELINE(model, "src/dataflow/20B_tokenizer.json") # 20B_tokenizer.json is in https://github.com/BlinkDL/ChatRWKV
 pipeline = PIPELINE(model, "rwkv_vocab_v20230424") # for rwkv "world" models
 
+pl.seed_everything(seed_everything)
+
 ctx = "\nIn a shocking finding, scientist discovered a herd of dragons living in a remote, previously unexplored valley, in Tibet. Even more surprising to the researchers was the fact that the dragons spoke perfect Chinese."
 print(ctx, end='')
 
@@ -165,8 +176,6 @@ args = PIPELINE_ARGS(temperature = 1.0, top_p = 0.7, top_k = 100, # top_k = 0 th
                      token_ban = [0], # ban the generation of some tokens
                      token_stop = [], # stop generation whenever you see any token here
                      chunk_len = 256) # split input into chunks to save VRAM (shorter -> slower)
-
-pl.seed_everything(1337)
 
 pipeline.generate(ctx, token_count=200, args=args, callback=my_print, recurrent=recurrent)
 print('\n')

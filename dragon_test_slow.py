@@ -70,9 +70,9 @@ class Args(dict):
 
 args = Args()
 args.head_size_a=64
-args.ctx_len=512
-args.n_layer=12
-args.n_embd=768
+args.ctx_len=2048
+args.n_layer=24
+args.n_embd=2048
 args.vocab_size=65536
 args.dropout=0.0
 args.layerwise_lr=True
@@ -80,6 +80,7 @@ args.train_stage=2
 args.grad_cp=True
 args.betas=[0.9,0.99]
 args.adam_eps=1e-8
+args.posemb='none'
 #args..epoch_begin
 #args.epoch_steps
 #args.real_bsz
@@ -89,7 +90,7 @@ args.load_partial=0
 args.proj_dir=''
 
 # Setup the model
-from src.model import SimpleRWKV
+from simplerwkv import SimpleRWKV
 model = RWKV(args)
 
 model_path = MODEL_PATH
