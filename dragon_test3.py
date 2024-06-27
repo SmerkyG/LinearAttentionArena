@@ -55,7 +55,7 @@ import typing
 @dataclass(kw_only=True)
 class CLI_Config:
     path: str
-    precision: int | str = '32'
+    precision: int | str = 'bf16'
     seed: int | None = None
     recurrent: int = 1
     train: typing.Any = None
@@ -89,30 +89,6 @@ MODEL_PATH = config.path
 model_path = MODEL_PATH
 
 print(f"########## Loading {model_path}... ##########")
-# try:
-#     load_dict = torch.load(model_path, map_location="cpu")
-#     load_keys = list(load_dict.keys())
-#     for k in load_keys:
-#         if k.startswith("_forward_module."):
-#             load_dict[k.replace("_forward_module.", "")] = load_dict[k]
-#             del load_dict[k]
-# except:
-#     print(f"Bad checkpoint {model_path}")
-#     if args.train_stage >= 2:  # try again using another checkpoint
-#         max_p = args.my_pile_prev_p
-#         if max_p == -1:
-#             model_path = f"{args.proj_dir}/rwkv-init.pth"
-#         else:
-#             model_path = f"{args.proj_dir}/rwkv-{max_p}.pth"
-#         args.epoch_begin = max_p + 1
-#         print(f"Trying {model_path}")
-#         load_dict = torch.load(model_path, map_location="cpu")
-
-# if args.load_partial == 1:
-#     load_keys = load_dict.keys()
-#     for k in model.state_dict():
-#         if k not in load_keys:
-#             load_dict[k] = model.state_dict()[k]
 
 state_dict = torch.load(model_path, mmap=True)
 with torch.device('meta'):
@@ -146,9 +122,6 @@ model.eval()
 from utils import PIPELINE, PIPELINE_ARGS
 
 # download models: https://huggingface.co/BlinkDL
-#model = RWKV(model='/fsx/BlinkDL/HF-MODEL/rwkv-4-pile-169m/RWKV-4-Pile-169M-20220807-8023', strategy='cpu fp32')
-#model = RWKV(model='out/L24-D2048-x060-0/rwkv-final.pth', strategy='cuda:4 fp16')
-#pipeline = PIPELINE(model, "src/dataflow/20B_tokenizer.json") # 20B_tokenizer.json is in https://github.com/BlinkDL/ChatRWKV
 pipeline = PIPELINE(model, "rwkv_vocab_v20230424") # for rwkv "world" models
 
 if config.seed is not None:
