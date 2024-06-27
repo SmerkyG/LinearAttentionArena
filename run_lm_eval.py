@@ -123,79 +123,6 @@ class EvalHarnessAdapter(GPT2LM):
         #super().__init__()
         self.tokenizer = TokenizerWrapper(pipeline.tokenizer)
 
-    # def greedy_until(self, requests): # designed for coqa
-    #     res = []
-    #     for i in range(len(requests)):
-    #         if i % 50 == 0:
-    #             print(i)
-    #         otoken = []
-    #         while True:
-    #             src = self.tokenizer.encode(requests[i][0]) + otoken
-
-    #             src = src[-4096:]
-    #             outputs, _ = model.forward(src, None)
-                
-    #             otoken += [int(torch.argmax(outputs))]
-    #             ss = self.tokenizer.decode(otoken)
-    #             if '\n' in ss or len(ss) > 200:
-    #                 if not ss.endswith('\n'):
-    #                     ss = ss + '\n'
-    #                 print(ss)
-    #                 res += [(ss)]
-    #                 break
-    #     print(res)
-    #     return res
-
-
-    def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
-        raise NotImplementedError(
-            "`loglikelihood_rolling` is currently not supported"
-        )
-    
-    def generate_until(self, requests, disable_tqdm: bool = False):
-        raise NotImplementedError(
-            "`generate_until` is currently not supported"
-        )
-
-    @property
-    def eot_token_id(self):
-        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
-        return self.tokenizer.eos_token_id
-
-    @property
-    def max_length(self):
-        # FIXME - is this correct? is it even used? didn't seem to be
-        # FIXME - we really should support recurrent inference
-        return config.model.ctx_len
-        # try:
-        #     return self.gpt2.config.n_ctx
-        # except AttributeError:
-        #     # gptneoconfig doesn't have n_ctx apparently
-        #     return self.gpt2.config.max_position_embeddings
-
-    @property
-    def max_gen_toks(self):
-        # FIXME - is this correct? is it even used? didn't seem to be, since the model itself complained at 512 when returning 256 here
-        # FIXME - we really should support recurrent inference
-        return config.model.ctx_len
-
-    @property
-    def batch_size(self):
-        return 1 
-        # TODO: fix multi-gpu
-        #return self.batch_size_per_gpu  # * gpus
-
-    @property
-    def device(self):
-        # Isn't used because we override _loglikelihood_tokens
-        raise NotImplementedError()
-
-    def tok_encode(self, string: str):
-        return self.tokenizer.encode(string, add_special_tokens=False)
-
-    def tok_decode(self, tokens):
-        return self.tokenizer.decode(tokens)
-            
     def _loglikelihood_tokens(self, requests, disable_tqdm=False):
         global logitBuf, correctBuf
 
@@ -256,17 +183,5 @@ with torch.no_grad():
             limit=None,
             bootstrap_iters=10000,
         )    
-    # results = evaluator.simple_evaluate(
-#no_cache=True,
-    #     model=adapter,
-    #     tasks=eval_tasks,
-    #     #provide_description=False,
-    #     num_fewshot=0,
-    #     limit=None,
-    #     bootstrap_iters=10000,
-    #     numpy_random_seed = config.seed,
-    #     torch_random_seed = config.seed,
-    #     # fewshot_random_seed = config.seed, # FIXME - needed in next version of lm_eval
-    # )
 
 print(results['results'])
