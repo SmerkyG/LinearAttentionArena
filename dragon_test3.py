@@ -2,6 +2,7 @@ import os
 import sys
 import torch
 
+from configs import parse_cmdline_configs, TrainerCLI_Config, Model_Config, Runtime_Config, Config
 
 # set these before import RWKV
 #os.environ['RWKV_JIT_ON'] = '1'
@@ -45,52 +46,31 @@ import torch
 #
 # ########################################################################################################
 
-class Args(dict):
-    def __init__(self, **kwargs):
-        for name, value in kwargs:
-            self[name] = value
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as e:
-            raise AttributeError(e)
-    def __setattr__(self, name, value):
-         self[name] = value
+from dataclasses import dataclass
+import typing
 
-args = Args()
-args.head_size_a=64
-args.head_size_divisor=8
-args.ctx_len=2048
-args.n_layer=24
-args.n_embd=2048
-args.dim_att=0
-args.dim_ffn=0
-args.vocab_size=65536
-args.posemb = 'none'
-args.dropout=0.0
-args.layerwise_lr=True
-args.train_stage=2
-args.grad_cp=True
-args.betas=[0.9,0.99]
-args.adam_eps=1e-8
-#args..epoch_begin
-#args.epoch_steps
-#args.real_bsz
-args.wandb=''
-args.model_type = sys.argv[2] #'llama3'#'x060b2_poco'
+@dataclass(kw_only=True)
+class CLI_Config:
+    path: str
+    seed: int | None = None
+    recurrent: int = 1
+    train: typing.Any = None
+    model: Model_Config
 
-args.load_partial=0
-args.proj_dir=''
-
-
-os.environ["RWKV_MODEL_TYPE"] = args.model_type
-os.environ["RWKV_CTXLEN"] = str(args.ctx_len)
-os.environ["RWKV_HEAD_SIZE_A"] = str(args.head_size_a)
-
-
-if len(sys.argv) < 4:
-    print('usage:\n\tdragon_test.py MODEL_PATH MODEL_TYPE recurrent|nonrecurrent [seed]')
+config, errors = parse_cmdline_configs(sys.argv[1:], CLI_Config)
+if errors != '':
+    print(errors)
     exit()
+
+
+os.environ["RWKV_MODEL_TYPE"] = config.model.model_type
+os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
+os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size_a)
+
+
+# if len(sys.argv) < 4:
+#     print('usage:\n\tdragon_test.py MODEL_PATH MODEL_TYPE recurrent|nonrecurrent [seed]')
+#     exit()
 
 
 # Setup the model
@@ -98,17 +78,11 @@ import lightning as pl
 #trainer = pl.Trainer(precision=32)
 from src.model import RWKV
 #with trainer.init_module(empty_init=True):
-#    model = RWKV(args)
+#    model = RWKV(config)
 
 
-MODEL_PATH=sys.argv[1]
+MODEL_PATH = config.path
 model_path = MODEL_PATH
-
-recurrent = sys.argv[3] == 'recurrent'
-
-seed_everything = 1337
-if len(sys.argv) > 4:
-    seed_everything = int(sys.argv[4])
 
 print(f"########## Loading {model_path}... ##########")
 # try:
@@ -138,7 +112,7 @@ print(f"########## Loading {model_path}... ##########")
 
 state_dict = torch.load(model_path, mmap=True)
 with torch.device('meta'):
-    model = RWKV(args)
+    model = RWKV(config)
 model.load_state_dict(state_dict, assign=True)
 
 #model.load_state_dict(load_dict)
@@ -159,9 +133,10 @@ from utils import PIPELINE, PIPELINE_ARGS
 #pipeline = PIPELINE(model, "src/dataflow/20B_tokenizer.json") # 20B_tokenizer.json is in https://github.com/BlinkDL/ChatRWKV
 pipeline = PIPELINE(model, "rwkv_vocab_v20230424") # for rwkv "world" models
 
-pl.seed_everything(seed_everything)
+if config.seed is not None:
+    pl.seed_everything(config.seed)
 
-ctx = "\nIn a shocking finding, scientist discovered a herd of dragons living in a remote, previously unexplored valley, in Tibet. Even more surprising to the researchers was the fact that the dragons spoke perfect Chinese."
+ctx = "\nNews:\n\nIn a shocking finding, scientist discovered a herd of dragons living in a remote, previously unexplored valley, in Tibet. Even more surprising to the researchers was the fact that the dragons spoke perfect Chinese."
 print(ctx, end='')
 
 def my_print(s):
@@ -178,7 +153,7 @@ args = PIPELINE_ARGS(temperature = 1.0, top_p = 0.7, top_k = 100, # top_k = 0 th
                      token_stop = [], # stop generation whenever you see any token here
                      chunk_len = 256) # split input into chunks to save VRAM (shorter -> slower)
 
-pipeline.generate(ctx, token_count=200, args=args, callback=my_print, recurrent=recurrent)
+pipeline.generate(ctx, token_count=200, args=args, callback=my_print, recurrent=config.recurrent)
 print('\n')
 
 # out, state = model.forward([187, 510, 1563, 310, 247], None)

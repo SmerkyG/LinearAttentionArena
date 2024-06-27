@@ -1,0 +1,4 @@
+model:
+    __type__: configs.FinchB2_Config
+    model_type: x060b2_goco
+    other_layer_ratio: 1/6

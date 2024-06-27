@@ -18,6 +18,8 @@ from .cmix import ChannelMixState
 
 import src
 
+from configs import TrainerCLI_Config, Model_Config, Transformer_Config, Train_Config
+
 import src.cmix_x052
 import src.cmix_x060
 
@@ -66,11 +68,11 @@ class BlockState:
         self.time_mix_state = time_mix_state
         self.channel_mix_state = channel_mix_state
 
-def get_first_cache_once_layer_id(n_layer):
-    return (2*n_layer)//3
+def get_second_submodel_layer_id(model_config:Model_Config):
+    return int(model_config.n_layer * (1.0 - model_config.other_layer_ratio))
 
 class Block(nn.Module):
-    def __init__(self, args, layer_id, angles, bias_mask):
+    def __init__(self, args:Transformer_Config, layer_id, angles, bias_mask):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
@@ -116,20 +118,20 @@ class Block(nn.Module):
             print(f"Unsupported model type: {mt}")
             exit(0)
         
-        if 'taylor' in mt:
-            if layer_id >= get_first_cache_once_layer_id(args.n_layer): #args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
+        if '_taylor' in mt:
+            if layer_id >= get_second_submodel_layer_id(args): #args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
                 if 'taylorchunked' in mt:
                     attFactory = lambda: src.tmix_taylorchunked.RWKV_Tmix_taylorchunked(args, layer_id)
                 else:
                     attFactory = lambda: src.tmix_taylor.RWKV_Tmix_taylor(args, layer_id)
 
         if '_gptalpha' in mt:
-            if layer_id >= get_first_cache_once_layer_id(args.n_layer):
+            if layer_id >= get_second_submodel_layer_id(args):
                 attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
 
         self.is_cache_once = '_goco' in mt
         if self.is_cache_once:
-            if layer_id >= get_first_cache_once_layer_id(args.n_layer) and layer_id < args.n_layer:
+            if layer_id >= get_second_submodel_layer_id(args) and layer_id < args.n_layer:
                 if '_gocobha' in mt:
                     attFactory = lambda: src.tmix_gocobha.GPTAlpha_Tmix_gocobha(args, layer_id, angles, bias_mask)
                 else:
@@ -225,11 +227,13 @@ class AlibiMask(nn.Module):
         return self.mask[:, :q.size(-2), :q.size(-2)]
 
 class RWKV(pl.LightningModule):
-    def __init__(self, args):
+    def __init__(self, config:TrainerCLI_Config):
         super().__init__()
         self.metrics = dict(loss=metrics.Loss(), acc=metrics.Accuracy())
 
-        self.args = args
+        self.config = config
+
+        args:Transformer_Config = config.model
 
         if args.dim_att <= 0:
             args.dim_att = args.n_embd
@@ -262,6 +266,7 @@ class RWKV(pl.LightningModule):
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
 
+
         if args.dropout > 0:
             self.drop0 = nn.Dropout(p = args.dropout)
         else:
@@ -285,7 +290,7 @@ class RWKV(pl.LightningModule):
 
 
     def configure_optimizers(self):
-        args = self.args
+        train_config = self.config.train
         
         lr_decay = set()
         lr_1x = set()
@@ -294,28 +299,28 @@ class RWKV(pl.LightningModule):
         for n, p in self.named_parameters():
             if not p.requires_grad:
                 continue
-            if (("_w1" in n) or ("_w2" in n)) and (args.layerwise_lr > 0):
+            if (("_w1" in n) or ("_w2" in n)) and (train_config.layerwise_lr > 0):
                 lr_1x.add(n)
-            elif (("time_mix" in n) or ("time_maa" in n)) and (args.layerwise_lr > 0):
-                if args.train_stage == 2:
+            elif (("time_mix" in n) or ("time_maa" in n)) and (train_config.layerwise_lr > 0):
+                if train_config.train_stage == 2:
                     lr_2x.add(n)
                 else:
                     lr_1x.add(n)
-            elif (("time_decay" in n) or ("time_daaaa" in n)) and (args.layerwise_lr > 0):
-                if args.train_stage == 2:
+            elif (("time_decay" in n) or ("time_daaaa" in n)) and (train_config.layerwise_lr > 0):
+                if train_config.train_stage == 2:
                     lr_3x.add(n)
                 else:
                     lr_2x.add(n)
-            elif ("time_faaaa" in n) and (args.layerwise_lr > 0):
-                if args.train_stage == 2:
+            elif ("time_faaaa" in n) and (train_config.layerwise_lr > 0):
+                if train_config.train_stage == 2:
                     lr_2x.add(n)
                 else:
                     lr_1x.add(n)
-            elif ("time_first" in n) and (args.layerwise_lr > 0):
+            elif ("time_first" in n) and (train_config.layerwise_lr > 0):
                 lr_3x.add(n)
             elif ('.A_log' in n) or n.endswith('.bias'): # mamba
                 lr_1x.add(n)
-            elif (len(p.squeeze().shape) >= 2) and (args.weight_decay > 0):
+            elif (len(p.squeeze().shape) >= 2) and (train_config.weight_decay > 0):
                 lr_decay.add(n)
             else:
                 lr_1x.add(n)
@@ -344,11 +349,12 @@ class RWKV(pl.LightningModule):
         if len(lr_3x) > 0:
             optim_groups += [{"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0, 'name':'lr_3x'}]
         if len(lr_decay) > 0:
-            optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": args.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
+            optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": train_config.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
 
+        betas = (train_config.beta1, train_config.beta2)
         if self.deepspeed_offload:
-            return DeepSpeedCPUAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adamw_mode=True, amsgrad=False)
-        return FusedAdam(optim_groups, lr=self.args.lr_init, betas=self.args.betas, eps=self.args.adam_eps, bias_correction=True, adam_w_mode=True, amsgrad=False)
+            return DeepSpeedCPUAdam(optim_groups, lr=train_config.lr_init, betas=betas, eps=train_config.adam_eps, bias_correction=True, adamw_mode=True, amsgrad=False)
+        return FusedAdam(optim_groups, lr=train_config.lr_init, betas=betas, eps=train_config.adam_eps, bias_correction=True, adam_w_mode=True, amsgrad=False)
 
     @property
     def deepspeed_offload(self) -> bool:
@@ -359,15 +365,15 @@ class RWKV(pl.LightningModule):
         return False
 
     def forward(self, idx, last_model_state:ModelState|None = None):
-        args = self.args
+        config : Transformer_Config = self.config.model
         B, T = idx.size()
-        assert T <= args.ctx_len, "Cannot forward, model ctx_len is exhausted."
+        assert T <= config.ctx_len, "Cannot forward, model ctx_len is exhausted."
 
         x = self.emb(idx)
 
         dtype = x.dtype#torch.get_autocast_gpu_dtype()
 
-        total_n_layer = args.n_layer
+        total_n_layer = config.n_layer
 
         # FIXME - might need to be true later for BPTT
         requires_grad = self.training
@@ -375,9 +381,9 @@ class RWKV(pl.LightningModule):
             #dtype = x.dtype
             last_model_state = ModelState()
 
-            wkv_state_shape = [B, args.dim_att//args.head_size_a, args.head_size_a, args.head_size_a]
+            wkv_state_shape = [B, config.dim_att//config.head_size_a, config.head_size_a, config.head_size_a]
             if self.is_llama:
-                wkv_state_shape = [B, 0, args.dim_att * 2]
+                wkv_state_shape = [B, 0, config.dim_att * 2]
             last_model_state.block_states = [
                 BlockState(
                     TimeMixState(
@@ -393,8 +399,8 @@ class RWKV(pl.LightningModule):
             last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
             if self.is_cache_once:
                 # FIXME - need max ctx len not just training ctx_len?
-                k_cache_len = 0# if self.training else self.args.ctx_len
-                last_model_state.k_cache = torch.zeros([B, k_cache_len, args.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                k_cache_len = 0# if self.training else self.config.ctx_len
+                last_model_state.k_cache = torch.zeros([B, k_cache_len, config.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
         x = self.blocks[0].ln0(x)
@@ -415,14 +421,14 @@ class RWKV(pl.LightningModule):
             block = self.blocks[layer_id]
 
             block_args = [x, x_original_cache, k_cache, last_model_state]
-            if self.training and args.grad_cp == 1:
-                if "deepspeed" in args.strategy:
+            if self.training and self.config.train.grad_cp == 1:
+                if "deepspeed" in self.config.train.strategy:
                     x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
                 else:
                     x, next_block_state = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
             else:
                 x, next_block_state = block(*block_args)
-            if self.is_cache_once and layer_id == get_first_cache_once_layer_id(args.n_layer) - 1:
+            if self.is_cache_once and layer_id == get_second_submodel_layer_id(self.config.model) - 1:
                 new_compressed_kv_cache = self.w_kv_cache_a(x)
                 c = torch.cat([x_original, new_compressed_kv_cache],dim=-1)
                 new_k_cache = rms_norm(self.w_kv_cache_b(c))
@@ -461,8 +467,8 @@ class RWKV(pl.LightningModule):
 
         return loss, logits, preds, next_block_states
     
-    def get_real_global_step(self): return int(self.trainer.global_step + self.args.epoch_begin * self.args.epoch_steps)
-    def get_real_tokens(self): return self.get_real_global_step() * self.args.ctx_len * self.args.real_bsz
+    def get_real_global_step(self): return int(self.trainer.global_step + self.config.train.epoch_begin * self.config.train.epoch_steps)
+    def get_real_tokens(self): return self.get_real_global_step() * self.config.model.ctx_len * self.config.runtime.real_bsz
 
     def training_step(self, batch, batch_idx):
         inputs, labels = batch
@@ -486,7 +492,7 @@ class RWKV(pl.LightningModule):
                         #str += f'{name}:{metric_value:.4f} '
                     #str += f"{gb:.1f}gb {int(ms_per)}ms {ktok_per_sec:.2f}kT/s {self.total_runtime:.1f}sec"
                     #print(str)
-                    if len(self.args.wandb) > 0:
+                    if len(self.config.train.wandb) > 0:
                         self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
 
         return L2Wrap.apply(loss, logits)
@@ -509,7 +515,7 @@ class RWKV(pl.LightningModule):
                 logdict["val/" + name] = metric_value
                 str += f"{metric_value:.4f} "
                 metric.clear()
-            if len(self.args.wandb) > 0:
+            if len(self.config.train.wandb) > 0:
                 self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
 
             console_clear_last_line()
@@ -559,7 +565,7 @@ class RWKV(pl.LightningModule):
             scale = 1.0
             if "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
                 if 'ln_x' in n and n.endswith('.weight'):
-                    layer_scale = (1+int(n.split('.')[1])) / self.args.n_layer
+                    layer_scale = (1+int(n.split('.')[1])) / self.config.model.n_layer
                     m[n] = (p * 0.0) + (layer_scale ** 0.7)
                 else:
                     m[n] = p
@@ -571,13 +577,13 @@ class RWKV(pl.LightningModule):
                 print(f" [scale {scale}]")
             elif n == "head.weight":
                 m[n] = p
-                if self.args.vocab_size > self.args.n_embd:
-                    scale = 0.5 * math.sqrt(self.args.vocab_size / self.args.n_embd)
+                if self.config.model.vocab_size > self.config.model.n_embd:
+                    scale = 0.5 * math.sqrt(self.config.model.vocab_size / self.config.model.n_embd)
                 else:
                     scale = 0.5
                 nn.init.orthogonal_(m[n], gain=scale)
                 print(f" [scale {scale}]")
-            elif 'mamba' in os.environ["RWKV_MODEL_TYPE"] and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_first_cache_once_layer_id(self.args.n_layer))):
+            elif 'mamba' in os.environ["RWKV_MODEL_TYPE"] and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_second_submodel_layer_id(self.config.model))):
                 m[n] = p
                 if '.out_proj.weight' in n:
                     scale = 0
@@ -586,7 +592,7 @@ class RWKV(pl.LightningModule):
                     # nn.init.kaiming_uniform_(p, a=math.sqrt(5))
                     # with torch.no_grad():
                     #     n_residuals_per_layer = 2
-                    #     p /= math.sqrt(n_residuals_per_layer * self.args.n_layer)
+                    #     p /= math.sqrt(n_residuals_per_layer * self.config.model.n_layer)
                     # print(f" [scale special residual]")
                 elif '.bias' in n:# and 'dt_proj.bias' not in n:
                     scale = 0
@@ -615,7 +621,7 @@ class RWKV(pl.LightningModule):
 
                 print(f" [scale {scale}]")
 
-                if self.args.accelerator.upper() == "GPU":
+                if self.config.train.accelerator.upper() == "GPU":
                     m[n] = torch.empty((shape[0], shape[1]), device="cuda")
                 else:
                     m[n] = torch.empty((shape[0], shape[1]))

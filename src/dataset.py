@@ -9,44 +9,47 @@ from torch.utils.data import Dataset
 from lightning_utilities.core.rank_zero import rank_zero_info
 from .binidx import MMapIndexedDataset
 from .utils import MaybeIsPrime
+from lightning import Trainer
 
+from configs import TrainerCLI_Config
 
 class MyDataset(Dataset):
-    def __init__(self, args):
-        self.args = args
+    def __init__(self, config:TrainerCLI_Config, trainer:Trainer):
+        self.config = config
+        self.trainer = trainer
 
-        assert args.data_type == "binidx"
-        self.vocab_size = args.vocab_size
+        assert config.train.data_type == "binidx"
+        self.vocab_size = config.model.vocab_size
         rank_zero_info(f"Current vocab size = {self.vocab_size} (make sure it's correct)")
 
-        self.data = MMapIndexedDataset(args.data_file)
+        self.data = MMapIndexedDataset(config.train.data_file)
         self.data_size = len(self.data._bin_buffer) // self.data._index._dtype_size
         rank_zero_info(f"Data has {self.data_size} tokens.")
 
-        self.samples_per_epoch = args.epoch_steps * args.real_bsz
+        self.samples_per_epoch = config.train.epoch_steps * config.runtime.real_bsz
         assert self.samples_per_epoch == 40320
-        rank_zero_info(f"########## training stage {args.train_stage} ##########")
-        dataset_slot = self.data_size // args.ctx_len
-        assert MaybeIsPrime(args.magic_prime)
-        assert args.magic_prime % 3 == 2
-        assert args.magic_prime / dataset_slot > 0.99 and args.magic_prime / dataset_slot <= 1
+        rank_zero_info(f"########## training stage {config.train.train_stage} ##########")
+        dataset_slot = self.data_size // config.model.ctx_len
+        assert MaybeIsPrime(config.train.magic_prime)
+        assert config.train.magic_prime % 3 == 2
+        assert config.train.magic_prime / dataset_slot > 0.99 and config.train.magic_prime / dataset_slot <= 1
 
     def __len__(self):
-        return self.args.epoch_steps * self.args.micro_bsz
+        return self.config.train.epoch_steps * self.config.train.micro_bsz
 
     def __getitem__(self, idx):
-        args = self.args
-        rank = self.args.trainer.global_rank
-        epoch = self.args.trainer.current_epoch
-        world_size = self.args.trainer.world_size
+        config = self.config
+        rank = self.trainer.global_rank
+        epoch = self.trainer.current_epoch
+        world_size = self.trainer.world_size
         # print(f"epoch {epoch} idx {idx} rank {rank}/{world_size}")
 
-        ctx_len = args.ctx_len
+        ctx_len = config.model.ctx_len
         req_len = ctx_len + 1
-        magic_prime = args.magic_prime
+        magic_prime = config.train.magic_prime
         data = self.data
 
-        assert args.train_stage > 0
+        assert config.train.train_stage > 0
         ii = 1 + epoch * self.samples_per_epoch + (idx * world_size) + rank
 
         factor = (math.sqrt(5) - 1) / 2

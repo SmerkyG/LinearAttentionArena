@@ -13,8 +13,10 @@ from typing import Tuple
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
 
+from configs import Transformer_Config
+
 class GPTAlpha_Tmix_goco(MyModule):
-    def __init__(self, args, layer_id, angles, bias_mask):
+    def __init__(self, args:Transformer_Config, layer_id, angles, bias_mask):
         super().__init__()
         self.args = args
         self.layer_id = layer_id

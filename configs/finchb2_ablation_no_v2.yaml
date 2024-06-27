@@ -1,0 +1,4 @@
+model:
+    __type__: configs.FinchB2_Config
+    model_type: x060b2
+    use_v2: 0
