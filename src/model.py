@@ -69,7 +69,7 @@ class BlockState:
         self.channel_mix_state = channel_mix_state
 
 def get_second_submodel_layer_id(model_config:Model_Config):
-    return int(model_config.n_layer * (1.0 - 1.0 / model_config.inv_other_layer_ratio))
+    return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
 
 class Block(nn.Module):
     def __init__(self, args:Transformer_Config, layer_id, angles, bias_mask):
