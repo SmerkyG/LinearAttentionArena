@@ -21,11 +21,13 @@ from configs import parse_cmdline_configs, TrainerCLI_Config, Model_Config, Runt
 os.environ["RWKV_JIT_ON"] = '1'
 os.environ["RWKV_CUDA_ON"] = '1'
 
-from utils import PIPELINE, PIPELINE_ARGS
+#from utils import PIPELINE, PIPELINE_ARGS
+from rwkv.utils import PIPELINE, PIPELINE_ARGS
 
 from lm_eval import tasks, evaluator
-from lm_eval.models.huggingface import HFLM
-from lm_eval.api.model import LM, TemplateLM
+#from lm_eval.models.huggingface import HFLM
+from lm_eval.models.gpt2 import GPT2LM
+#from lm_eval.api.model import LM, TemplateLM
 
 ########################################################################################################
 
@@ -37,6 +39,7 @@ import typing
 @dataclass(kw_only=True)
 class CLI_Config:
     path: str
+    precision: int | str = '32'
     seed: int | None = None
     recurrent: int = 1
     train:typing.Any = None
@@ -62,12 +65,24 @@ with torch.device('meta'):
     model = RWKV(config)
 model.load_state_dict(state_dict, assign=True)
 
-dtype = torch.float32
+match config.precision:
+    case 32:
+        dtype = torch.float32
+    case '32':
+        dtype = torch.float32
+    case 16:
+        dtype = torch.float16
+    case '16':
+        dtype = torch.float16
+    case 'bf16':
+        dtype = torch.bfloat16
+    case _:
+        print("Bad precision type specified")
+        exit()
+
 device = 'cuda'
 model = model.to(device=device, dtype=dtype)
 model.eval()
-if dtype != torch.float:
-    torch.set_autocast_gpu_dtype(dtype)
 
 pipeline = PIPELINE(model, "rwkv_vocab_v20230424")
 
@@ -100,12 +115,12 @@ class TokenizerWrapper:
     def decode(self, tokens):
         return self.tokenizer.decode(tokens)
 
-class EvalHarnessAdapter(TemplateLM):
+class EvalHarnessAdapter(GPT2LM):
     # bugfix for lm_eval 0.4.2
     AUTO_MODEL_CLASS = transformers.AutoModelForCausalLM
 
     def __init__(self):
-        super().__init__()
+        #super().__init__()
         self.tokenizer = TokenizerWrapper(pipeline.tokenizer)
 
     # def greedy_until(self, requests): # designed for coqa
@@ -232,16 +247,26 @@ if config.seed is None:
 
 adapter = EvalHarnessAdapter()
 with torch.no_grad():
-    results = evaluator.simple_evaluate(
-        model=adapter,
-        tasks=eval_tasks,
-        #provide_description=False,
-        num_fewshot=0,
-        limit=None,
-        bootstrap_iters=10000,
-        numpy_random_seed = config.seed,
-        torch_random_seed = config.seed,
-        # fewshot_random_seed = config.seed, # FIXME - needed in next version of lm_eval
-    )
+    with torch.amp.autocast(device_type='cuda', dtype=dtype):
+        results = evaluator.evaluate(
+            lm=adapter,
+            task_dict=tasks.get_task_dict(eval_tasks),
+            provide_description=False,
+            num_fewshot=0,
+            limit=None,
+            bootstrap_iters=10000,
+        )    
+    # results = evaluator.simple_evaluate(
+#no_cache=True,
+    #     model=adapter,
+    #     tasks=eval_tasks,
+    #     #provide_description=False,
+    #     num_fewshot=0,
+    #     limit=None,
+    #     bootstrap_iters=10000,
+    #     numpy_random_seed = config.seed,
+    #     torch_random_seed = config.seed,
+    #     # fewshot_random_seed = config.seed, # FIXME - needed in next version of lm_eval
+    # )
 
 print(results['results'])
