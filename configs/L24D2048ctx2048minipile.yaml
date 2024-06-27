@@ -1,6 +1,6 @@
 model:
     __type__: configs.Transformer_Config
-    ctx_len: 4096
+    ctx_len: 2048
     n_layer: 24
     n_embd: 2048
     posemb: none
@@ -21,7 +21,7 @@ train:
     validation_data_file: "data/minipile_validation" 
     val_check_interval: 100 
     my_exit_tokens: 1498226207
-    magic_prime: 365759
+    magic_prime: 731531
 
     lr_init: 3e-4
     lr_final: 1e-4

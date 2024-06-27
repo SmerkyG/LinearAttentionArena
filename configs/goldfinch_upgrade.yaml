@@ -1,0 +1,8 @@
+model:
+    __type__: configs.Transformer_Config
+    model_type: x060_goco
+    inv_other_layer_ratio: 6
+
+train:
+    load_partial: 1
+    epoch_save: 1

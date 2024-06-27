@@ -69,7 +69,7 @@ class BlockState:
         self.channel_mix_state = channel_mix_state
 
 def get_second_submodel_layer_id(model_config:Model_Config):
-    return int(model_config.n_layer * (1.0 - model_config.other_layer_ratio))
+    return int(model_config.n_layer * (1.0 - 1.0 / model_config.inv_other_layer_ratio))
 
 class Block(nn.Module):
     def __init__(self, args:Transformer_Config, layer_id, angles, bias_mask):
@@ -327,7 +327,8 @@ class RWKV(pl.LightningModule):
 
         param_dict = {n: p for n, p in self.named_parameters()}
         param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x)
-        assert sorted(param_dict) == sorted(param_check)
+        if not train_config.load_partial:
+            assert sorted(param_dict) == sorted(param_check)
 
         lr_decay = sorted(list(lr_decay))
         lr_1x = sorted(list(lr_1x))

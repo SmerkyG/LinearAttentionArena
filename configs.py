@@ -10,7 +10,7 @@ class Model_Config:
     n_layer:int = 6
     n_embd:int = 512
     dropout:float = 0.0
-    other_layer_ratio:float = 1/3
+    inv_other_layer_ratio:float = 3
 
 @dataclass(kw_only=True)
 class Transformer_Config(Model_Config):
@@ -248,7 +248,7 @@ def typecheck(path : str, obj : typing.Any, required_type : type = typing.Any):
                         # add default value into config
                         obj[k] = param.default
 
-        elif required_type != typing.Any and not isinstance(obj, required_type):
+        elif required_type != typing.Any and not isinstance(obj, required_type) and not (required_type == float and isinstance(obj, int)):
             errors += f"Config Type Mismatch: expected {type_name(required_type)} but got {type_name(type(obj))}\n in config setting `{path}` : {type_name(required_type)} = {obj}\n"
             return errors
 

@@ -1,5 +1,5 @@
 model:
     __type__: configs.FinchB2_Config
     model_type: x060b2_goco
-    other_layer_ratio: 1/3
+    inv_other_layer_ratio: 3
     posemb: 'rope'

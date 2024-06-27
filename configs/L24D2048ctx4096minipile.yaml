@@ -1,0 +1,40 @@
+model:
+    __type__: configs.Transformer_Config
+    ctx_len: 4096
+    n_layer: 24
+    n_embd: 2048
+    posemb: none
+    vocab_size: 65536
+
+train:
+    load_model: "0"
+    wandb: "Linear_Attention_Arena" 
+    proj_dir: 'out'
+ 
+    train_stage: 3 
+    epoch_count: 999999 
+    epoch_begin: 0
+    epoch_save: 10
+
+    data_type: "binidx" 
+    data_file: "data/minipile" 
+    validation_data_file: "data/minipile_validation" 
+    val_check_interval: 100 
+    my_exit_tokens: 1498226207
+    magic_prime: 365759
+
+    lr_init: 3e-4
+    lr_final: 1e-4
+    warmup_steps: 10 
+    beta1: 0.9 
+    beta2: 0.99 
+    adam_eps: 1e-8 
+    weight_decay: 0.001 
+
+    devices: 4
+    num_nodes: 1
+    micro_bsz: 4
+    accumulate_grad_batches: 8
+    strategy: deepspeed_stage_2 
+    grad_cp: 1
+    ds_bucket_mb: 2 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
