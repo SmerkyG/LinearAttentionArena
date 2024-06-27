@@ -79,14 +79,16 @@ class RWKV_Tmix_x060(MyModule):
         v = self.value(xv)
         g = F.silu(self.gate(xg))
         
-        w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
+        w = (self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2).to(r.dtype)
         u = self.time_faaaa
 
         wkv_state = last_state.wkv_state.clone()
         x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
         x = x.view(B * T, C)
 
-        x = self.ln_x(x).view(B, T, C)
-        #x = F.group_norm(x.float(), self.ln_x.num_groups, self.ln_x.weight.float(), self.ln_x.bias.float()).to(r.dtype).view(B, T, C)
+        if self.training:
+            x = self.ln_x(x).view(B, T, C)
+        else:
+            x = F.group_norm(x.float(), self.ln_x.num_groups, self.ln_x.weight.float(), self.ln_x.bias.float(), eps=self.ln_x.eps).to(r.dtype).view(B, T, C)
         x = self.output(x * g)
         return x, TimeMixState(wkv_state, shift_state)

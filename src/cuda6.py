@@ -27,24 +27,24 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
         def forward(ctx, B, T, C, H, r, k, v, w, u, s):
             with torch.no_grad():
                 dtype = r.dtype
-                assert r.dtype == dtype
-                assert k.dtype == dtype
-                assert v.dtype == dtype
-                assert w.dtype == dtype
-                assert u.dtype == dtype
-                assert s.dtype == dtype
+                assert r.dtype == dtype, 'mismatched r.dtype'
+                assert k.dtype == dtype, 'mismatched k.dtype'
+                assert v.dtype == dtype, 'mismatched v.dtype'
+                assert w.dtype == dtype, 'mismatched w.dtype'
+                assert u.dtype == dtype, 'mismatched u.dtype'
+                assert s.dtype == dtype, 'mismatched s.dtype'
                 assert HEAD_SIZE == C // H
                 ctx.B = B
                 ctx.T = T
                 ctx.C = C
                 ctx.H = H
                 ctx.dtype = dtype
-                assert r.is_contiguous()
-                assert k.is_contiguous()
-                assert v.is_contiguous()
-                assert w.is_contiguous()
-                assert u.is_contiguous()
-                assert s.is_contiguous()
+                assert r.is_contiguous(), 'r not contiguous'
+                assert k.is_contiguous(), 'k not contiguous'
+                assert v.is_contiguous(), 'v not contiguous'
+                assert w.is_contiguous(), 'w not contiguous'
+                assert u.is_contiguous(), 'u not contiguous'
+                assert s.is_contiguous(), 's not contiguous'
                 ctx.save_for_backward(r, k, v, w, u)
                 y = torch.empty((B, T, C), device=r.device, dtype=dtype, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
                 if dtype == torch.bfloat16:
@@ -61,14 +61,14 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
         def backward(ctx, gy):
             with torch.no_grad():
                 dtype = ctx.dtype
-                assert gy.dtype == dtype
+                assert gy.dtype == dtype, 'mismatched gy.dtype'
                 B = ctx.B
                 T = ctx.T
                 C = ctx.C
                 H = ctx.H
                 if not gy.is_contiguous():
                     gy = gy.contiguous()
-                assert gy.is_contiguous()
+                assert gy.is_contiguous(), 'gy not contiguous'
                 r, k, v, w, u = ctx.saved_tensors
                 gr = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
                 gk = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)

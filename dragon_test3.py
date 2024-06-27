@@ -1,6 +1,9 @@
 import os
 import sys
 import torch
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cuda.matmul.allow_tf32 = True
+import torch.amp
 
 from configs import parse_cmdline_configs, TrainerCLI_Config, Model_Config, Runtime_Config, Config
 
@@ -52,6 +55,7 @@ import typing
 @dataclass(kw_only=True)
 class CLI_Config:
     path: str
+    precision: int | str = '32'
     seed: int | None = None
     recurrent: int = 1
     train: typing.Any = None
@@ -117,12 +121,26 @@ model.load_state_dict(state_dict, assign=True)
 
 #model.load_state_dict(load_dict)
 
-dtype = torch.float32
+match config.precision:
+    case 32:
+        dtype = torch.float32
+    case '32':
+        dtype = torch.float32
+    case 16:
+        dtype = torch.float16
+    case '16':
+        dtype = torch.float16
+    case 'bf16':
+        dtype = torch.bfloat16
+    case _:
+        print("Bad precision type specified")
+        exit()
+
 device = 'cuda'
 model = model.to(device=device, dtype=dtype)
 model.eval()
-if dtype != torch.float:
-    torch.set_autocast_gpu_dtype(dtype)
+#if dtype != torch.float:
+#    torch.set_autocast_gpu_dtype(dtype)
 
 
 from utils import PIPELINE, PIPELINE_ARGS
@@ -153,7 +171,8 @@ args = PIPELINE_ARGS(temperature = 1.0, top_p = 0.7, top_k = 100, # top_k = 0 th
                      token_stop = [], # stop generation whenever you see any token here
                      chunk_len = 256) # split input into chunks to save VRAM (shorter -> slower)
 
-pipeline.generate(ctx, token_count=200, args=args, callback=my_print, recurrent=config.recurrent)
+with torch.amp.autocast(device_type='cuda', dtype=dtype):
+    pipeline.generate(ctx, token_count=200, args=args, callback=my_print, recurrent=config.recurrent)
 print('\n')
 
 # out, state = model.forward([187, 510, 1563, 310, 247], None)
