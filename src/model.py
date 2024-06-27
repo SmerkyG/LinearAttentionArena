@@ -102,7 +102,8 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
                 gu = torch.sum(gu, 0).view(H, C//H)
                 return (None, None, None, None, gr, gk, gv, gw, gu)
 
-    def RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u):
+    @torch.jit.ignore
+    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u):
         return WKV_6.apply(B, T, C, H, r, k, v, w, u)
 
 elif 'x052' in os.environ["RWKV_MODEL_TYPE"]:
@@ -264,8 +265,7 @@ class RWKV_Tmix_x060(MyModule):
             self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
             self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
             self.time_maa_g = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
-
-            D_MIX_LORA = 32 # generate TIME_MIX for w,k,v,r,g
+            D_MIX_LORA = 32
             self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*5))
             self.time_maa_w2 = nn.Parameter(torch.zeros(5, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
@@ -273,7 +273,6 @@ class RWKV_Tmix_x060(MyModule):
             for n in range(args.dim_att):
                 decay_speed[n] = -6 + 5 * (n / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1)
             self.time_decay = nn.Parameter(decay_speed.reshape(1,1,args.dim_att))
-            
             D_DECAY_LORA = 64
             self.time_decay_w1 = nn.Parameter(torch.zeros(args.n_embd, D_DECAY_LORA))
             self.time_decay_w2 = nn.Parameter(torch.zeros(D_DECAY_LORA, args.dim_att).uniform_(-0.01, 0.01))
@@ -282,62 +281,51 @@ class RWKV_Tmix_x060(MyModule):
             for n in range(args.dim_att):
                 zigzag = ((n + 1) % 3 - 1) * 0.1
                 tmp[n] = ratio_0_to_1 * (1 - (n / (args.dim_att - 1))) + zigzag
-
             self.time_faaaa = nn.Parameter(tmp.reshape(self.n_head, self.head_size))
 
-        self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
         self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
 
         self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
-        
-    @MyFunction
-    def jit_func(self, x):
-        B, T, C = x.size()
-
-        xx = self.time_shift(x) - x
-
-        xxx = x + xx * self.time_maa_x
-        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_w2).view(5, B, T, -1)
-        mw, mk, mv, mr, mg = xxx.unbind(dim=0)
-
-        xw = x + xx * (self.time_maa_w + mw)
-        xk = x + xx * (self.time_maa_k + mk)
-        xv = x + xx * (self.time_maa_v + mv)
-        xr = x + xx * (self.time_maa_r + mr)
-        xg = x + xx * (self.time_maa_g + mg)
-
-        r = self.receptance(xr)
-        k = self.key(xk)
-        v = self.value(xv)
-        g = F.silu(self.gate(xg))
-
-        ww = torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
-        w = (self.time_decay + ww).to(r.dtype)
-
-        return r, k, v, g, w
 
     @MyFunction
-    def jit_func_2(self, x, g):
-        B, T, C = x.size()
-        x = x.view(B * T, C)
-        
-        x = self.ln_x(x).view(B, T, C)
-        x = self.output(x * g)
-        return x
-
     def forward(self, x):
         B, T, C = x.size()
         H = self.n_head
 
-        r, k, v, g, w = self.jit_func(x)
-        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u=self.time_faaaa)
+        dxprev = F.pad(x, (0,0,1,-1)) - x
 
-        return self.jit_func_2(x, g)
+        xxx = x + dxprev * self.time_maa_x
+        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_w2).view(5, B, T, C)
+
+        mw, mk, mv, mr, mg = xxx.unbind(dim=0)
+        xr = x + dxprev * (self.time_maa_r + mr)
+        xk = x + dxprev * (self.time_maa_k + mk)
+        xv = x + dxprev * (self.time_maa_v + mv)
+        xw = x + dxprev * (self.time_maa_w + mw)
+        xg = x + dxprev * (self.time_maa_g + mg)
+        
+        r = self.receptance(xr)
+        k = self.key(xk)
+        v = self.value(xv)
+        g = F.silu(self.gate(xg))
+        
+        w = (self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2).to(r.dtype)
+        u = self.time_faaaa
+
+        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u)
+        x = x.view(B * T, C)
+
+        if self.training:
+            x = self.ln_x(x).view(B, T, C)
+        else:
+            x = F.group_norm(x.float(), self.ln_x.num_groups, self.ln_x.weight.float(), self.ln_x.bias.float(), eps=self.ln_x.eps).to(r.dtype).view(B, T, C)
+        x = self.output(x * g)
+        return x
     
 class RWKV_Tmix_x060b(MyModule):
     def __init__(self, args, layer_id):
