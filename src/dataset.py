@@ -26,10 +26,12 @@ class MyDataset(Dataset):
         self.data_size = len(self.data._bin_buffer) // self.data._index._dtype_size
         rank_zero_info(f"Data has {self.data_size} tokens.")
 
-        self.samples_per_epoch = config.train.epoch_steps * config.runtime.real_bsz
+        self.samples_per_epoch = config.train.epoch_steps * config.runtime.global_step_bsz
         assert self.samples_per_epoch == 40320
         rank_zero_info(f"########## training stage {config.train.train_stage} ##########")
-        dataset_slot = self.data_size // config.model.ctx_len
+        #dataset_slot = self.data_size // config.model.ctx_len
+        assert config.train.my_exit_tokens <= self.data_size
+        dataset_slot = config.train.my_exit_tokens // config.model.ctx_len
         assert MaybeIsPrime(config.train.magic_prime)
         assert config.train.magic_prime % 3 == 2
         assert config.train.magic_prime / dataset_slot > 0.99 and config.train.magic_prime / dataset_slot <= 1

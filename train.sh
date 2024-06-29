@@ -75,6 +75,7 @@ rm -f "$PROJ_DIR"/rwkv-{0..100}.pth # remove old checkpts in folder
 # 2048 would be 731531
 # 4096 would be 365759
 # for 7583728687 tokens, 4096 would be 1851491
+# for 100000000 tokens, 4096 would be 24405
 # use https://www.dcode.fr/prime-numbers-search
 #
 N_NODE=1 # number of nodes

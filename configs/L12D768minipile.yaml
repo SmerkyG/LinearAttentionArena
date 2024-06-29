@@ -21,7 +21,7 @@ train:
     validation_data_file: "data/minipile_validation" 
     val_check_interval: 100 
     my_exit_tokens: 1498226207
-    magic_prime: 2926181
+    magic_prime: 1463027
 
     lr_init: 6e-4
     lr_final: 2e-4
@@ -34,7 +34,7 @@ train:
     devices: 1
     num_nodes: 1
     micro_bsz: 32
-    accumulate_grad_batches: 1
+    accumulate_grad_batches: 2
     strategy: deepspeed_stage_2 
-    grad_cp: 2
+    grad_cp: 1
     ds_bucket_mb: 2 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)

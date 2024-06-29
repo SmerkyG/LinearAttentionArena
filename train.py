@@ -42,7 +42,7 @@ if __name__ == "__main__":
     #args.check_val_every_n_epoch = int(1e20)
     #args.log_every_n_steps = int(1e20)
     #lit_args.max_epochs = -1  # continue forever
-    runtime_config.real_bsz = int(config.train.num_nodes) * int(config.train.devices) * config.train.micro_bsz * config.train.accumulate_grad_batches
+    runtime_config.global_step_bsz = int(config.train.num_nodes) * int(config.train.devices) * config.train.micro_bsz * config.train.accumulate_grad_batches
     os.environ["RWKV_MODEL_TYPE"] = config.model.model_type
     os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size_a)
@@ -52,14 +52,10 @@ if __name__ == "__main__":
         os.makedirs(config.train.proj_dir)
 
     if config.train.train_stage > 0:
-        magic_prime_bak = config.train.magic_prime
+        config.train.epoch_count = config.train.magic_prime * config.train.accumulate_grad_batches // 40320
 
-        if magic_prime_bak > 0:
-            config.train.magic_prime = magic_prime_bak
-        config.train.epoch_count = config.train.magic_prime // 40320
-
-        config.train.epoch_steps = 40320 // runtime_config.real_bsz
-        assert config.train.epoch_steps * runtime_config.real_bsz == 40320
+        config.train.epoch_steps = 40320 // runtime_config.global_step_bsz
+        assert config.train.epoch_steps * runtime_config.global_step_bsz == 40320
         if config.train.train_stage >= 2:  # find latest saved model
             list_p = []
             for p in os.listdir(config.train.proj_dir):
@@ -86,7 +82,7 @@ if __name__ == "__main__":
                         config.train.warmup_steps = 30
             config.train.epoch_begin = max_p + 1
 
-    samples_per_epoch = config.train.epoch_steps * runtime_config.real_bsz
+    samples_per_epoch = config.train.epoch_steps * runtime_config.global_step_bsz
     tokens_per_epoch = samples_per_epoch * config.model.ctx_len
     try:
         deepspeed_version = deepspeed.__version__
@@ -97,11 +93,11 @@ if __name__ == "__main__":
         f"""
 ############################################################################
 #
-# Model {config.model.model_type} {config.train.precision.upper()} on {config.train.num_nodes}x{config.train.devices} {config.train.accelerator.upper()}, bsz {config.train.num_nodes}x{config.train.devices}x{config.train.micro_bsz}={runtime_config.real_bsz}, {config.train.strategy} {'with grad_cp' if config.train.grad_cp > 0 else ''}
+# Model {config.model.model_type} {config.train.precision.upper()} on {config.train.num_nodes}x{config.train.devices} {config.train.accelerator.upper()}, bsz {config.train.num_nodes}x{config.train.devices}x{config.train.micro_bsz}={runtime_config.global_step_bsz}, {config.train.strategy} {'with grad_cp' if config.train.grad_cp > 0 else ''}
 #
 # Data = {config.train.data_file} ({config.train.data_type}), ProjDir = {config.train.proj_dir}
 #
-# Epoch = {config.train.epoch_begin} to {config.train.epoch_begin + config.train.epoch_count - 1} (will continue afterwards), save every {config.train.epoch_save} epoch
+# Epoch = {config.train.epoch_begin} to {config.train.epoch_count - 1} (will continue afterwards), save every {config.train.epoch_save} epoch
 #
 # Each "epoch" = {config.train.epoch_steps} steps, {samples_per_epoch} samples, {tokens_per_epoch} tokens
 #

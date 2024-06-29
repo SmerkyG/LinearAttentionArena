@@ -29,7 +29,7 @@ class FinchB2_Config(Transformer_Config):
 class Runtime_Config:
     run_name:str = ''
     my_timestamp:str = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
-    real_bsz:int = 0
+    global_step_bsz:int = 0
     my_pile_prev_p:int = 0
 
 @dataclass(kw_only=True)

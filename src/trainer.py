@@ -21,16 +21,15 @@ class train_callback(pl.Callback):
         config = self.config
         # if config.cuda_cleanup > 0:
         #     torch.cuda.empty_cache()
-        real_step = trainer.global_step + config.train.epoch_begin * config.train.epoch_steps
+        real_global_step = trainer.global_step + config.train.epoch_begin * config.train.epoch_steps
 
         # LR schedule
-        w_step = config.train.warmup_steps
+        w_steps = config.train.warmup_steps
         if config.train.lr_final == config.train.lr_init or config.train.epoch_count == 0:
             lr = config.train.lr_init
         else:
-            decay_step = real_step
             decay_total = (config.train.epoch_count) * config.train.epoch_steps
-            progress = (decay_step - w_step + 1) / (decay_total - w_step)
+            progress = (real_global_step - w_steps + 1) / (decay_total - w_steps)
             progress = min(1, max(0, progress))
 
             if config.train.lr_final == 0 or config.train.lr_init == 0:  # linear decay
@@ -41,8 +40,8 @@ class train_callback(pl.Callback):
             #     print(trainer.global_step, decay_step, decay_total, w_step, progress, lr)
 
         if config.train.my_exit_tokens != 0: # cosine decay
-            real_tokens = real_step * config.model.ctx_len * config.runtime.real_bsz
-            warmup_tokens = w_step * config.model.ctx_len * config.runtime.real_bsz
+            real_tokens = real_global_step * config.model.ctx_len * config.runtime.global_step_bsz
+            warmup_tokens = w_steps * config.model.ctx_len * config.runtime.global_step_bsz
             progress = (real_tokens - warmup_tokens) / (abs(config.train.my_exit_tokens) - warmup_tokens)
             progress = max(0, min(1, progress))
             lr_final_factor = config.train.lr_final / config.train.lr_init                
@@ -58,9 +57,10 @@ class train_callback(pl.Callback):
                         pl_module.state_dict(),
                         f"{config.train.proj_dir}/rwkv-final.pth",
                     )
+                    print("!!!TRAINING COMPLETE!!!")
                     exit(0)
-        if trainer.global_step < w_step:
-            lr = lr * (0.2 + 0.8 * trainer.global_step / w_step)
+        if trainer.global_step < w_steps:
+            lr = lr * (0.2 + 0.8 * trainer.global_step / w_steps)
 
         if config.train.weight_decay_final > 0:
             wd_now = config.train.weight_decay * math.exp(math.log(config.train.weight_decay_final / config.train.weight_decay) * progress)
@@ -78,9 +78,9 @@ class train_callback(pl.Callback):
 
         trainer.my_lr = lr
         trainer.my_wd = wd_now
-        # rank_zero_info(f"{real_step} {lr}")
+        # rank_zero_info(f"{real_global_step} {lr}")
 
-        if trainer.global_step == 0:
+        if trainer.global_step == 0 and batch_idx == 0:
             if trainer.is_global_zero:  # logging
                 trainer.my_loss_sum = 0
                 trainer.my_loss_count = 0
@@ -105,8 +105,8 @@ class train_callback(pl.Callback):
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         config = self.config
-        token_per_step = config.model.ctx_len * config.runtime.real_bsz / config.train.accumulate_grad_batches
-        real_step = trainer.global_step + config.train.epoch_begin * config.train.epoch_steps
+        token_per_step = config.model.ctx_len * config.runtime.global_step_bsz / config.train.accumulate_grad_batches
+        real_global_step = trainer.global_step + config.train.epoch_begin * config.train.epoch_steps
         if trainer.is_global_zero:  # logging
             t_now = time.time_ns()
             kt_s = 0
@@ -126,17 +126,17 @@ class train_callback(pl.Callback):
             trainer.my_loss_count += 1
             trainer.my_epoch_loss = trainer.my_loss_sum / trainer.my_loss_count
             self.log("lr", trainer.my_lr, prog_bar=True, on_step=True)
-            # self.log("s", real_step, prog_bar=True, on_step=True)
+            # self.log("s", real_global_step, prog_bar=True, on_step=True)
 
             # if len(config.train.wandb) > 0:
-            #     lll = {"loss": trainer.my_loss, "lr": trainer.my_lr, "wd": trainer.my_wd, "Gtokens": real_step * token_per_step / 1e9}
+            #     lll = {"loss": trainer.my_loss, "lr": trainer.my_lr, "wd": trainer.my_wd, "Gtokens": real_global_step * token_per_step / 1e9}
             #     if kt_s > 0:
             #         lll["kt/s"] = kt_s
-            #     trainer.my_wandb.log(lll, step=int(real_step))
+            #     trainer.my_wandb.log(lll, step=int(real_global_step))
         if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy): # save pth
             if config.train.magic_prime > 0:
                 expand_factor = 1
-                if int(real_step) == int(config.train.magic_prime * expand_factor // self.config.runtime.real_bsz) - 1:
+                if int(real_global_step) == int(config.train.magic_prime * expand_factor // self.config.runtime.global_step_bsz) - 1:
                     to_save_dict = pl_module.state_dict()
                     my_save(
                         config, trainer,
@@ -160,8 +160,9 @@ class train_callback(pl.Callback):
     def on_train_epoch_end(self, trainer, pl_module):
         config = self.config
         to_save_dict = {}
+        real_current_epoch = int(config.train.epoch_begin + trainer.current_epoch)
         if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy):  # save pth
-            if (config.train.epoch_save > 0 and trainer.current_epoch % config.train.epoch_save == 0) or (trainer.current_epoch == config.train.epoch_count - 1):
+            if (config.train.epoch_save > 0 and real_current_epoch % config.train.epoch_save == 0) or (real_current_epoch == config.train.epoch_count - 1):
                 if config.train.data_type == 'wds_img':
                     raw_dict = pl_module.state_dict()
                     for k in raw_dict:
@@ -179,7 +180,7 @@ class train_callback(pl.Callback):
                     print('Error\n\n', e, '\n\n')
 
         if trainer.is_global_zero:  # logging
-            trainer.my_log.write(f"{config.train.epoch_begin + trainer.current_epoch} {trainer.my_epoch_loss:.6f} {math.exp(trainer.my_epoch_loss):.4f} {trainer.my_lr:.8f} {datetime.datetime.now()} {trainer.current_epoch}\n")
+            trainer.my_log.write(f"{real_current_epoch} {trainer.my_epoch_loss:.6f} {math.exp(trainer.my_epoch_loss):.4f} {trainer.my_lr:.8f} {datetime.datetime.now()} {trainer.current_epoch}\n")
             trainer.my_log.flush()
 
             trainer.my_loss_sum = 0

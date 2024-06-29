@@ -127,7 +127,7 @@ pipeline = PIPELINE(model, "rwkv_vocab_v20230424") # for rwkv "world" models
 if config.seed is not None:
     pl.seed_everything(config.seed)
 
-ctx = "\nNews:\n\nIn a shocking finding, scientist discovered a herd of dragons living in a remote, previously unexplored valley, in Tibet. Even more surprising to the researchers was the fact that the dragons spoke perfect Chinese."
+ctx = "\nIn a shocking finding, scientist discovered a herd of dragons living in a remote, previously unexplored valley, in Tibet. Even more surprising to the researchers was the fact that the dragons spoke perfect Chinese."
 print(ctx, end='')
 
 def my_print(s):
