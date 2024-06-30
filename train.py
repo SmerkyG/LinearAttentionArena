@@ -52,10 +52,10 @@ if __name__ == "__main__":
         os.makedirs(config.train.proj_dir)
 
     if config.train.train_stage > 0:
-        config.train.epoch_count = config.train.magic_prime * config.train.accumulate_grad_batches // 40320
+        runtime_config.epoch_count = config.train.magic_prime // 40320
 
-        config.train.epoch_steps = 40320 // runtime_config.global_step_bsz
-        assert config.train.epoch_steps * runtime_config.global_step_bsz == 40320
+        runtime_config.epoch_global_steps = 40320 // runtime_config.global_step_bsz
+        assert runtime_config.epoch_global_steps * runtime_config.global_step_bsz == 40320
         if config.train.train_stage >= 2:  # find latest saved model
             list_p = []
             for p in os.listdir(config.train.proj_dir):
@@ -82,7 +82,7 @@ if __name__ == "__main__":
                         config.train.warmup_steps = 30
             config.train.epoch_begin = max_p + 1
 
-    samples_per_epoch = config.train.epoch_steps * runtime_config.global_step_bsz
+    samples_per_epoch = runtime_config.epoch_global_steps * runtime_config.global_step_bsz
     tokens_per_epoch = samples_per_epoch * config.model.ctx_len
     try:
         deepspeed_version = deepspeed.__version__
@@ -97,9 +97,9 @@ if __name__ == "__main__":
 #
 # Data = {config.train.data_file} ({config.train.data_type}), ProjDir = {config.train.proj_dir}
 #
-# Epoch = {config.train.epoch_begin} to {config.train.epoch_count - 1} (will continue afterwards), save every {config.train.epoch_save} epoch
+# Epoch = {config.train.epoch_begin} to {config.runtime.epoch_count - 1} (will continue afterwards), save every {config.train.epoch_save} epoch
 #
-# Each "epoch" = {config.train.epoch_steps} steps, {samples_per_epoch} samples, {tokens_per_epoch} tokens
+# Each "epoch" = {runtime_config.epoch_global_steps} global steps, {samples_per_epoch} samples, {tokens_per_epoch} tokens
 #
 # Model = {config.model.n_layer} n_layer, {config.model.n_embd} n_embd, {config.model.ctx_len} ctx_len
 #
@@ -107,7 +107,7 @@ if __name__ == "__main__":
 #
 # Found torch {torch.__version__}, recommend latest torch
 # Found deepspeed {deepspeed_version}, recommend latest deepspeed
-# Found lightning {pl.__version__}, recommend 1.9.5
+# Found lightning {pl.__version__}, requires 2+
 #
 ############################################################################
 """

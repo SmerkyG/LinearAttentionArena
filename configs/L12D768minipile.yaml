@@ -12,7 +12,6 @@ train:
     proj_dir: 'out'
  
     train_stage: 3 
-    epoch_count: 999999 
     epoch_begin: 0
     epoch_save: 10
 

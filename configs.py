@@ -31,6 +31,8 @@ class Runtime_Config:
     my_timestamp:str = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
     global_step_bsz:int = 0
     my_pile_prev_p:int = 0
+    epoch_global_steps:int = 999999999
+    epoch_count:int = 999999999
 
 @dataclass(kw_only=True)
 class Train_Config:
@@ -40,8 +42,6 @@ class Train_Config:
     wandb:str = ''
     proj_dir:str = 'out'
 
-    epoch_steps:int = 999999999
-    epoch_count:int = 999999999
     epoch_begin:int = 0
     epoch_save:int = 5
     micro_bsz:int = 12

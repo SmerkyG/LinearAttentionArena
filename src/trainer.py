@@ -21,14 +21,14 @@ class train_callback(pl.Callback):
         config = self.config
         # if config.cuda_cleanup > 0:
         #     torch.cuda.empty_cache()
-        real_global_step = trainer.global_step + config.train.epoch_begin * config.train.epoch_steps
+        real_global_step = trainer.global_step + config.train.epoch_begin * config.runtime.epoch_global_steps
 
         # LR schedule
         w_steps = config.train.warmup_steps
-        if config.train.lr_final == config.train.lr_init or config.train.epoch_count == 0:
+        if config.train.lr_final == config.train.lr_init or config.runtime.epoch_count == 0:
             lr = config.train.lr_init
         else:
-            decay_total = (config.train.epoch_count) * config.train.epoch_steps
+            decay_total = config.runtime.epoch_count * config.runtime.epoch_global_steps
             progress = (real_global_step - w_steps + 1) / (decay_total - w_steps)
             progress = min(1, max(0, progress))
 
@@ -105,31 +105,31 @@ class train_callback(pl.Callback):
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         config = self.config
-        token_per_step = config.model.ctx_len * config.runtime.global_step_bsz / config.train.accumulate_grad_batches
-        real_global_step = trainer.global_step + config.train.epoch_begin * config.train.epoch_steps
+        tokens_per_micro_step = config.model.ctx_len * config.runtime.global_step_bsz / config.train.accumulate_grad_batches
+        real_global_step = trainer.global_step + config.train.epoch_begin * config.runtime.epoch_global_steps
         if trainer.is_global_zero:  # logging
             t_now = time.time_ns()
             kt_s = 0
             try:
                 t_cost = (t_now - trainer.my_time_ns) / 1e9
-                kt_s = token_per_step / t_cost / 1000
+                kt_s = tokens_per_micro_step / t_cost / 1000
                 self.log("REAL it/s", 1.0 / t_cost, prog_bar=True, on_step=True)
                 self.log("Kt/s", kt_s, prog_bar=True, on_step=True)
             except:
                 pass
             trainer.my_time_ns = t_now
             if pl.__version__[0]=='2':
-                trainer.my_loss = outputs["loss"]
+                micro_step_loss = outputs["loss"] * trainer.accumulate_grad_batches
             else:
-                trainer.my_loss = trainer.my_loss_all.float().mean().item()
-            trainer.my_loss_sum += trainer.my_loss
+                micro_step_loss = trainer.my_loss_all.float().mean().item() * trainer.accumulate_grad_batches
+            trainer.my_loss_sum += micro_step_loss
             trainer.my_loss_count += 1
             trainer.my_epoch_loss = trainer.my_loss_sum / trainer.my_loss_count
             self.log("lr", trainer.my_lr, prog_bar=True, on_step=True)
             # self.log("s", real_global_step, prog_bar=True, on_step=True)
 
             # if len(config.train.wandb) > 0:
-            #     lll = {"loss": trainer.my_loss, "lr": trainer.my_lr, "wd": trainer.my_wd, "Gtokens": real_global_step * token_per_step / 1e9}
+            #     lll = {"loss": micro_step_loss, "lr": trainer.my_lr, "wd": trainer.my_wd, "Gtokens": real_global_step * tokens_per_micro_step / 1e9}
             #     if kt_s > 0:
             #         lll["kt/s"] = kt_s
             #     trainer.my_wandb.log(lll, step=int(real_global_step))

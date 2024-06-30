@@ -26,7 +26,7 @@ class MyDataset(Dataset):
         self.data_size = len(self.data._bin_buffer) // self.data._index._dtype_size
         rank_zero_info(f"Data has {self.data_size} tokens.")
 
-        self.samples_per_epoch = config.train.epoch_steps * config.runtime.global_step_bsz
+        self.samples_per_epoch = config.runtime.epoch_global_steps * config.runtime.global_step_bsz
         assert self.samples_per_epoch == 40320
         rank_zero_info(f"########## training stage {config.train.train_stage} ##########")
         #dataset_slot = self.data_size // config.model.ctx_len
@@ -37,7 +37,7 @@ class MyDataset(Dataset):
         assert config.train.magic_prime / dataset_slot > 0.99 and config.train.magic_prime / dataset_slot <= 1
 
     def __len__(self):
-        return self.config.train.epoch_steps * self.config.train.micro_bsz
+        return self.config.runtime.epoch_global_steps * self.config.train.micro_bsz * self.trainer.accumulate_grad_batches
 
     def __getitem__(self, idx):
         config = self.config
