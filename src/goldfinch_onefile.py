@@ -1,3 +1,4 @@
+import math
 import torch
 from torch import nn
 from dataclasses import dataclass
@@ -40,7 +41,7 @@ def get_first_goco_layer_id(config:Config):
     return int(config.n_layer / (1.0 - config.inverse_layer_ratio))
 
 class Transformer(nn.Module):
-    def __init__(self, config:Config, att_factory0, att_factory1, ffn_factory):
+    def __init__(self, config:Config, att_factory0, att_factory1, ffn_factory, do_init_weights:bool=True):
         super().__init__()
         self.config = config
         if config.d_ffn == 0:
@@ -49,7 +50,7 @@ class Transformer(nn.Module):
         self.embedding = nn.Embedding(config.vocab_size, config.d_model)
         self.embedding_layernorm = nn.LayerNorm(config.d_model)
         first_goco_layer_id = get_first_goco_layer_id(config)
-        self.layers = nn.ModuleList([
+        self.blocks = nn.ModuleList([
             TransformerBlock(config, 
                 att_factory0(config) if layer_id < first_goco_layer_id else att_factory1(config), 
                 ffn_factory(config)
@@ -63,45 +64,116 @@ class Transformer(nn.Module):
         self.w_k_cache_a = nn.Linear(config.d_model, config.d_model // MLA_FACTOR, bias=False)
         self.w_k_cache_b = nn.Linear(config.d_model // MLA_FACTOR + config.d_model, config.d_model, bias=False)
 
-    def forward(self, inputs, last_model_state:ModelState|None = None):
+        # these initializations are important for performance (but skip them for speed if you are loading a model from a pre-trained checkpoint)
+        if do_init_weights:
+            self.init_weights()
+
+    def forward(self, inputs, model_state_in:ModelState|None = None):
         config = self.config
         B, T = inputs.size()
 
         x = self.embedding(inputs)
         x = self.embedding_layernorm(x)
         original_input_embeddings = x
+        k_cache = torch.tensor([]) if model_state_in is None else model_state_in.k_cache
+        model_state_out = ModelState()
+        for layer_id in range(config.n_layer):
+            x, model_state_out.block_states[layer_id] = self.blocks[layer_id](x, original_input_embeddings, original_input_embeddings, k_cache)
 
-        if last_model_state is None:
-            dtype, device = x.dtype, x.device
-            last_model_state = ModelState()
+        return model_state_in
+
+    def init_weights(self):
+        for name, m in self.named_modules():               
+            scale = 1.0
+            if isinstance(m, nn.Linear):
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+                for kk in [".att.output", ".ffn.value", ".ffn.receptance"]:
+                    if name.endswith(kk):
+                        scale = 0
+
+                for kk in [".att.key"]:
+                    if name.endswith(kk):
+                        scale = 0.1
+
+                if name == "head":
+                    if self.config.vocab_size > self.config.d_model:
+                        scale = 0.5 * math.sqrt(self.config.vocab_size / self.config.d_model)
+                    else:
+                        scale = 0.5
+
+                if scale == 0:
+                    nn.init.zeros_(m.weight)
+                else:   
+                    nn.init.orthogonal_(m.weight, gain=scale)
+
+                print(f"{name} scale={scale}")
+            elif isinstance(m, nn.Embedding):
+                nn.init.uniform_(m.weight, a=-1e-4, b=1e-4)
+                print(name, "embed init")
+            elif name.endswith('.ln_x'):
+                layer_scale = (1+int(name.split('.')[1])) / self.args.n_layer
+                m.weight = nn.Parameter((m.weight * 0.0) + (layer_scale ** 0.7))
+                print(name, "layer_scale init")
+            else:
+                print(name, "(default init)")
+
+class GoldFinchTransformer(Transformer):
+    def __init__(self, config:Config, do_init_weights:bool=True):
+        super().__init__(config, FinchB2TimeMix, GoCOAttention, FinchChannelMix, do_init_weights=do_init_weights)
+
+    def forward(self, input_token_indices, model_state_in:ModelState|None = None):
+        config = self.config
+        B, T = input_token_indices.size()
+
+        if model_state_in is None:
+            dtype, device = self.embedding.weight.dtype, self.embedding.weight.device
+            model_state_in = ModelState()
             wkv_state_shape = [B, config.d_model//config.d_head, config.d_head, config.d_head]
-            last_model_state.block_states = [
+            model_state_in.block_states = [
                 BlockState(
                     time_mix_state=TimeMixState(
                         wkv_state=torch.zeros(wkv_state_shape, dtype=dtype, device=device), 
-                        shift_state=torch.zeros([B, x.size(-1)], dtype=dtype, device=device)
+                        shift_state=torch.zeros([B, config.d_model], dtype=dtype, device=device)
                     ), 
                     channel_mix_state=ChannelMixState(
-                        shift_state=torch.zeros([B, x.size(-1)], dtype=dtype, device=device)
+                        shift_state=torch.zeros([B, config.d_model], dtype=dtype, device=device)
                     )
                 ) 
                 for layer_id in range(config.n_layer)
             ]
-            last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=device, requires_grad=False)
+            model_state_in.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=device, requires_grad=False)
             if self.is_cache_once:
-                # FIXME - need max ctx len not just training ctx_len?
-                last_model_state.k_cache = torch.zeros([B, 0, config.d_model], dtype=dtype, device=device)
+                model_state_in.k_cache = torch.zeros([B, 0, config.d_model], dtype=dtype, device=device)
 
-        k_cache = torch.tensor([])
+        model_state_out = ModelState()
+        model_state_out.input_tokens_cache = torch.cat([model_state_in.input_tokens_cache, input_token_indices], dim=-1)
+
+        x = self.embedding(input_token_indices)
+        x = self.embedding_layernorm(x)
+
+        if self.training:
+            original_input_embeddings = x
+        else:
+            # use the input_tokens_cache to recreate the original_input_embeddings for prior sequence regions
+            original_input_embeddings = torch.cat( [
+                self.embedding_layernorm( self.embedding( model_state_in.input_tokens_cache ) ),
+                x
+            ], dim=-2)
+
+        k_cache = model_state_in.k_cache
         first_goco_layer_id = get_first_goco_layer_id(config)
         for layer_id in range(config.n_layer):
-            x = self.layers[layer_id](x, original_input_embeddings, k_cache)
+            x, model_state_out.block_states[layer_id] = self.blocks[layer_id](x, original_input_embeddings, k_cache)
+
             if layer_id == first_goco_layer_id:
                 new_compressed_k_cache_entries = self.w_k_cache_a(x)
                 c = torch.cat([original_input_embeddings, new_compressed_k_cache_entries],dim=-1)
                 # NOTE - instead of decompressing here, you can keep compressed_k_cache and decompress as you go during each sub-layer for extra memory savings
                 new_k_cache_entries = rms_norm(self.w_k_cache_b(c))
 
+                model_state_out.seq_pos = model_state_in.seq_pos + T
                 if self.training:
                     k_cache = new_k_cache_entries
                 else:
@@ -109,11 +181,10 @@ class Transformer(nn.Module):
                     k_cache = torch.cat([k_cache, new_k_cache_entries], dim=-2)
                     if prefilling:
                         # NOTE - no need to run the GoCO attention layers during prefill!
-                        break
-
-class GoldFinchTransformer(Transformer):
-    def __init__(self, config:Config):
-        super().__init__(config, FinchB2TimeMix, GoCOAttention, FinchChannelMix)
+                        break      
+        
+        model_state_out.k_cache = k_cache
+        return model_state_out
 
 class TransformerBlock(nn.Module):
     def __init__(self, config:Config, att:nn.Module, ffn:nn.Module):
@@ -310,8 +381,8 @@ class FinchChannelMix(nn.Module):
 
 # this class is not used in GoldFinch - it is provided to show how GPTAlpha Time Mixing works in a fully GPTAlpha Transformer model
 class GPTAlphaTransformer(Transformer):
-    def __init__(self, config:Config):
-        super().__init__(config, GPTAlphaTimeMix, GPTAlphaTimeMix, FinchChannelMix)
+    def __init__(self, config:Config, do_init_weights:bool=True):
+        super().__init__(config, GPTAlphaTimeMix, GPTAlphaTimeMix, FinchChannelMix, do_init_weights=do_init_weights)
 
 from typing import Tuple
 def apply_rotary_embedding(q, k, angles, seq_dim:int = -2) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -349,7 +420,7 @@ class GPTAlphaTimeMix(nn.Module):
 
         self.angles = angles
 
-    def forward(self, x, last_time_mix_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_time_mix_state:TimeMixState):
         B, T, C = x.size()
         N = self.n_head
         K = C // N
