@@ -277,17 +277,6 @@ class RWKV(pl.LightningModule):
             self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // MLA_FACTOR, bias=False)
             self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
 
-            with torch.no_grad():
-                ddd = torch.ones(1, 1, args.n_embd)
-                for i in range(args.n_embd):
-                    ddd[0, 0, i] = i / args.n_embd
-
-                self.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, 0.5))
-                self.time_maa_token = nn.Parameter(1.0 - torch.pow(ddd, 0.5))
-                D_MIX_LORA = 32
-                self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA))
-                self.time_maa_w2 = nn.Parameter(torch.zeros(D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
-
 
     def configure_optimizers(self):
         train_config = self.config.train
