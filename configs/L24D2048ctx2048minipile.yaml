@@ -3,7 +3,6 @@ model:
     ctx_len: 2048
     n_layer: 24
     n_embd: 2048
-    posemb: none
     vocab_size: 65536
 
 train:

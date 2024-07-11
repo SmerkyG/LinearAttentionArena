@@ -48,7 +48,7 @@ except:
 model_type = os.environ["RWKV_MODEL_TYPE"]
 for model_subtype in model_type.split('_'):
     if not importlib.util.find_spec('src.tmix_' + model_subtype):
-        print(f"couldn't find src.tmix_.{model_subtype}, despite it being listed as part of the model name")
+        print(f"couldn't find src.tmix_{model_subtype}, despite it being listed as part of the model name")
         exit()
     importlib.import_module('src.tmix_' + model_subtype)
 
@@ -72,9 +72,10 @@ def get_second_submodel_layer_id(model_config:Model_Config):
     return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
 
 class Block(nn.Module):
-    def __init__(self, args:Transformer_Config, layer_id, angles, bias_mask):
+    def __init__(self, config:TrainerCLI_Config, layer_id, angles, bias_mask):
         super().__init__()
-        self.args = args
+        self.config = config
+        self.args = args = config.model
         self.layer_id = layer_id
 
         self.ln1 = nn.LayerNorm(args.n_embd)
@@ -109,8 +110,8 @@ class Block(nn.Module):
         elif mt.startswith('gptalpha'):
             attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
         elif mt.startswith('llama3'):
-            attFactory = lambda: src.llama3.Llama3_Tmix(args, layer_id, angles, bias_mask)
-            ffnFactory = lambda: src.llama3.Llama3_CMix(args, layer_id)
+            attFactory = lambda: src.tmix_llama3.Llama3_Tmix(args, layer_id, angles, bias_mask)
+            ffnFactory = lambda: src.tmix_llama3.Llama3_CMix(args, layer_id)
         elif mt.startswith('mamba'):
             attFactory = lambda: src.tmix_mamba.Mamba(args, layer_id)
             ffnFactory = lambda: src.tmix_mamba.MambaFFN(args, layer_id)
@@ -250,14 +251,12 @@ class RWKV(pl.LightningModule):
 
         self.angles = None
         self.bias_mask = None
-        assert args.posemb in ['none', 'rope', 'brope', 'alibi'], 'unsupported setting for posemb'
-        match args.posemb:
-            case 'rope':
-                self.angles = generate_rotary_embedding(args.ctx_len * 2, args.head_size_a)
-            case 'brope':
-                self.angles = generate_binary_rotary_embedding(args.ctx_len * 2, args.head_size_a)
-            case 'alibi':
-                self.bias_mask = alibi_mask(args.ctx_len, self.n_kv_head)
+        if args.rope is not None:
+            self.angles = generate_rotary_embedding(args.ctx_len, args.head_size_a, args.rope.base * args.rope.rebase, args.rope.rescale)
+        elif args.brope is not None:
+            self.angles = generate_binary_rotary_embedding(args.ctx_len, args.head_size_a, args.brope.rescale)
+        elif args.alibi is not None:
+            self.bias_mask = alibi_mask(args.ctx_len, self.n_kv_head)
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 

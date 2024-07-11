@@ -92,11 +92,12 @@ class RWKV_Tmix_x060b2(MyModule):
         r = self.receptance(xr)
         k = self.key(xk)
         v = self.value(xv)
-        v2 = self.value(xv2) + torch.tanh(xv2 @ self.time_value2_w1) @ self.time_value2_w2
-        w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
+        v2 = (self.value(xv2) + torch.tanh(xv2 @ self.time_value2_w1) @ self.time_value2_w2).to(r.dtype)
+        w = (self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2).to(r.dtype)
 
         if self.use_one_minus_w:
-            k = k * (1 - (-w.exp()).exp())
+            k = (k * (1 - (-w.exp()).exp())).to(r.dtype)
+            #k = (k.float() * (1 - (-w.float().exp()).exp())).to(r.dtype)
 
         if self.use_v2:
             u = torch.zeros_like(self.time_faaaa)

@@ -60,9 +60,9 @@ class Transformer(nn.Module):
         self.ln_out = nn.LayerNorm(config.d_model)
         self.head = nn.Linear(config.d_model, config.vocab_size, bias=False)
 
-        MLA_FACTOR = 16
-        self.w_k_cache_a = nn.Linear(config.d_model, config.d_model // MLA_FACTOR, bias=False)
-        self.w_k_cache_b = nn.Linear(config.d_model // MLA_FACTOR + config.d_model, config.d_model, bias=False)
+        K_COMPRESSION_FACTOR = 16
+        self.w_k_cache_a = nn.Linear(config.d_model, config.d_model // K_COMPRESSION_FACTOR, bias=False)
+        self.w_k_cache_b = nn.Linear(config.d_model // K_COMPRESSION_FACTOR + config.d_model, config.d_model, bias=False)
 
         # these initializations are important for performance (but skip them for speed if you are loading a model from a pre-trained checkpoint)
         if do_init_weights:
@@ -113,7 +113,7 @@ class Transformer(nn.Module):
                 nn.init.uniform_(m.weight, a=-1e-4, b=1e-4)
                 print(name, "embed init")
             elif name.endswith('.ln_x'):
-                layer_scale = (1+int(name.split('.')[1])) / self.args.n_layer
+                layer_scale = (1+int(name.split('.')[1])) / self.config.n_layer
                 m.weight = nn.Parameter((m.weight * 0.0) + (layer_scale ** 0.7))
                 print(name, "layer_scale init")
             else:
@@ -343,9 +343,9 @@ class GoCOAttention(nn.Module):
         k = self.ln_k(k)
         v = self.ln_v(v)
 
-        q = q.view(B,-1,N,K).transpose(1,2)
-        k = k.view(B,-1,N,K).transpose(1,2)
-        v = v.view(B,-1,N,V).transpose(1,2)
+        q = q.view(B,T,N,K).transpose(1,2)
+        k = k.view(B,T,N,K).transpose(1,2)
+        v = v.view(B,T,N,V).transpose(1,2)
 
         x = nn.functional.scaled_dot_product_attention(q,k,v,is_causal=q.size(-2)>1)
 

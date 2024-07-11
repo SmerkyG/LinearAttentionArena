@@ -13,12 +13,28 @@ class Model_Config:
     inv_other_layer_ratio:float = 3
 
 @dataclass(kw_only=True)
+class RoPE_Config:
+    base:float = 10_000
+    rescale:float = 1.0
+    rebase:float = 1.0
+
+@dataclass(kw_only=True)
+class BinaryRoPE_Config:
+    rescale:float = 1.0
+
+@dataclass(kw_only=True)
+class Alibi_Config:
+    pass
+
+@dataclass(kw_only=True)
 class Transformer_Config(Model_Config):
     dim_att:int = 0
     dim_ffn:int = 0
     head_size_a:int = 64
     head_size_divisor:int = 8
-    posemb:str = 'none'
+    rope:RoPE_Config|None = None
+    brope:BinaryRoPE_Config|None = None
+    alibi:Alibi_Config|None = None
 
 @dataclass(kw_only=True)
 class FinchB2_Config(Transformer_Config):

@@ -5,15 +5,16 @@ import math
 
 from typing import Tuple
 
-def generate_rotary_embedding(max_seqlen:int, dim:int, theta:float = 10000.0):
-    angular_velocity = theta ** -(torch.arange(0, dim, 2, dtype=torch.float) / dim) # frequencies from 1.0 ... 1/theta
+def generate_rotary_embedding(max_seqlen:int, dim:int, theta:float = 10000.0, scale:float = 1):
+    angular_velocity = theta ** -(torch.arange(0, dim, 2, dtype=torch.float) / dim) / scale # frequencies from 1.0 ... 1/theta
     angles = torch.outer(torch.arange(max_seqlen), angular_velocity)
     return torch.polar(torch.ones_like(angles), angles)
 
-def generate_binary_rotary_embedding(max_seqlen:int, dim:int, theta:float = 10000.0):
+def generate_binary_rotary_embedding(max_seqlen:int, dim:int, scale:float=1):
     arange = torch.arange(dim // 2)
-    angular_velocity = math.pi * (2.0 ** -arange)
-    angular_velocity[24:] = 0.0 # clamp to 2^24 distance
+    angular_velocity = math.pi * (2.0 ** -arange) / scale # fastest velocity will rotate fully in two steps
+    angular_velocity[int(math.log2(max_seqlen)):] = 0.0 # don't supply velocities slower than the one that will get a single full rotation across the seqlen
+    #angular_velocity[20:] = 0.0 # don't supply velocities slower than the one that will get a single full rotation across 1024k ctxlen
     angles = torch.outer(torch.arange(max_seqlen), angular_velocity)
     return torch.polar(torch.ones_like(angles), angles)
 

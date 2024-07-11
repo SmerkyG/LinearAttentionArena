@@ -46,7 +46,7 @@ class Llama3_Tmix(MyModule):
         self.bias_mask = bias_mask
 
     @MyFunction
-    def forward(self, x, xo, last_timemix_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_timemix_state:TimeMixState):
         B, L, D = x.size()
         H = self.n_head
 
