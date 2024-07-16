@@ -251,16 +251,10 @@ class RWKV(pl.LightningModule):
 
         self.angles = None
         self.bias_mask = None
-        if args.rope is not None:
-            self.angles = generate_rotary_embedding(args.ctx_len, args.head_size_a, args.rope.base * args.rope.rebase, args.rope.rescale)
-        elif args.brope is not None:
-            self.angles = generate_binary_rotary_embedding(args.ctx_len, args.head_size_a, args.brope.rescale)
-        elif args.alibi is not None:
-            self.bias_mask = alibi_mask(args.ctx_len, self.n_kv_head)
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
-        self.blocks = nn.ModuleList([Block(args, i, self.angles, self.bias_mask) for i in range(args.n_layer)])
+        self.blocks = nn.ModuleList([Block(config, i, self.angles, self.bias_mask) for i in range(args.n_layer)])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
@@ -272,9 +266,8 @@ class RWKV(pl.LightningModule):
             self.drop0 = nn.Identity()
 
         if self.is_cache_once:
-            MLA_FACTOR = 16
-            self.w_kv_cache_a = nn.Linear(args.n_embd, args.n_embd // MLA_FACTOR, bias=False)
-            self.w_kv_cache_b = nn.Linear(args.n_embd // MLA_FACTOR + args.n_embd, args.dim_att, bias=False)
+            self.w_kv_cache_a = nn.Linear(args.n_embd, int(args.n_embd / args.kv_cache_compression_ratio), bias=False)
+            self.w_kv_cache_b = nn.Linear(int(args.n_embd / args.kv_cache_compression_ratio) + args.n_embd, args.dim_att, bias=False)
 
 
     def configure_optimizers(self):
@@ -353,10 +346,27 @@ class RWKV(pl.LightningModule):
             return cfg.get("offload_optimizer") or cfg.get("offload_param")
         return False
 
+    def ckpt(self, block, *block_args):
+        if block.training and self.config.train.grad_cp == 1:
+            if "deepspeed" in self.config.train.strategy:
+                x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
+            else:
+                x, next_block_state = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
+        else:
+            x, next_block_state = block(*block_args)
+        return x, next_block_state
+
     def forward(self, idx, last_model_state:ModelState|None = None):
         config : Transformer_Config = self.config.model
         B, T = idx.size()
-        assert T <= config.ctx_len, "Cannot forward, model ctx_len is exhausted."
+        assert (self.angles is None or T <= self.angles.size(0)) or (self.bias_mask is None or T <= self.bias_mask.size(0))
+
+        if config.rope is not None and self.angles is None:
+            self.angles = generate_rotary_embedding(config.ctx_len, config.head_size_a, config.rope.base * config.rope.rebase, config.rope.rescale)
+        elif config.brope is not None and self.angles is None:
+            self.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size_a, config.brope.rescale)
+        elif config.alibi is not None and self.bias_mask is None:
+            self.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head)
 
         x = self.emb(idx)
 
@@ -388,20 +398,17 @@ class RWKV(pl.LightningModule):
             last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
             if self.is_cache_once:
                 # FIXME - need max ctx len not just training ctx_len?
-                k_cache_len = 0# if self.training else self.config.ctx_len
+                k_cache_len = 0# if self.training else config.ctx_len
                 last_model_state.k_cache = torch.zeros([B, k_cache_len, config.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
         x = self.blocks[0].ln0(x)
-        x_original = x
+        x_original_chunk = x
         
-        if self.training:
-            x_original_cache = x
-        else:
-            x_original_cache = torch.cat( [
-                self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
-                x
-            ], dim=-2)
+        x_original_from_input_cache = torch.cat( [
+            self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
+            x
+        ], dim=-2)
         
         k_cache = last_model_state.k_cache
         next_model_state = ModelState()
@@ -409,29 +416,13 @@ class RWKV(pl.LightningModule):
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
-            block_args = [x, x_original_cache, k_cache, last_model_state]
-            if self.training and self.config.train.grad_cp == 1:
-                if "deepspeed" in self.config.train.strategy:
-                    x, next_block_state = deepspeed.checkpointing.checkpoint(block, *block_args)
-                else:
-                    x, next_block_state = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
-            else:
-                x, next_block_state = block(*block_args)
-            if self.is_cache_once and layer_id == get_second_submodel_layer_id(self.config.model) - 1:
-                new_compressed_kv_cache = self.w_kv_cache_a(x)
-                c = torch.cat([x_original, new_compressed_kv_cache],dim=-1)
-                new_k_cache = rms_norm(self.w_kv_cache_b(c))
+            x, next_block_state = self.ckpt(block, x, x_original_from_input_cache, k_cache, last_model_state)
+            if self.is_cache_once and layer_id == get_second_submodel_layer_id(config) - 1:
+                compressed_k_cache_chunk = self.w_kv_cache_a(x)
+                k_tokencat_chunk = torch.cat([x_original_chunk, compressed_k_cache_chunk],dim=-1)
+                k_cache_chunk = rms_norm(self.w_kv_cache_b(k_tokencat_chunk))
 
-                # FIXME - preallocate and edit in place instead?
-                if self.training:
-                    # FIXME - cat instead?
-                    k_cache = new_k_cache
-                    pass
-                else:
-                    k_cache = torch.cat([k_cache, new_k_cache], dim=-2)
-                # next_model_state.kv_cache = last_model_state.kv_cache
-                # last_model_state.seq_pos = last_model_state.seq_pos + T
-                # next_model_state.seq_pos = last_model_state.seq_pos
+                k_cache = torch.cat([k_cache, k_cache_chunk], dim=-2)
 
             next_model_state.block_states.append(next_block_state)
 
@@ -440,9 +431,9 @@ class RWKV(pl.LightningModule):
         next_model_state.k_cache = k_cache
         return x, next_model_state
 
-    def _get_loss_logits_preds(self, batch, batch_idx):
+    def _get_loss_logits_preds(self, batch, batch_idx, last_model_state):
         x, y = batch
-        logits, next_block_states = self(x)
+        logits, next_model_state = self(x, last_model_state)
     
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
         with torch.no_grad():
@@ -454,20 +445,21 @@ class RWKV(pl.LightningModule):
         if loss.isnan().any():
             raise Exception("loss was NaN")
 
-        return loss, logits, preds, next_block_states
+        return loss, logits, preds, next_model_state
     
     def get_real_global_step(self): return int(self.trainer.global_step + self.config.train.epoch_begin * self.config.runtime.epoch_global_steps)
     def get_real_tokens(self): return self.get_real_global_step() * self.config.model.ctx_len * self.config.runtime.global_step_bsz
 
     def training_step(self, batch, batch_idx):
         inputs, labels = batch
-        loss, logits, preds, next_block_states = self._get_loss_logits_preds(batch, batch_idx)
 
+        model_state = None
+
+        loss, logits, preds, model_state = self._get_loss_logits_preds((inputs, labels), batch_idx, model_state)
         margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
         # FIXME - sync from other devices/nodes here
         for metric in self.metrics.values():
             metric.update(margs)
-
         if self.trainer.is_global_zero:
             self.log("loss", float(loss), prog_bar=True, on_step=True)#, rank_zero_only=True)
             if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
@@ -513,7 +505,7 @@ class RWKV(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         inputs, labels = batch
-        loss, logits, preds, next_block_states = self._get_loss_logits_preds(batch, batch_idx)
+        loss, logits, preds, next_block_states = self._get_loss_logits_preds(batch, batch_idx, None)
         margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
         for name, metric in self.metrics.items():
             metric.update(margs)

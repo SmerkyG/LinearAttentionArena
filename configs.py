@@ -11,6 +11,7 @@ class Model_Config:
     n_embd:int = 512
     dropout:float = 0.0
     inv_other_layer_ratio:float = 3
+    kv_cache_compression_ratio:float = 16
 
 @dataclass(kw_only=True)
 class RoPE_Config:

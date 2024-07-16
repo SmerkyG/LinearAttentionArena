@@ -1,4 +1,6 @@
 model:
     __type__: configs.Transformer_Config
     model_type: gptalpha
-    posemb: 'rope'
+    rope:
+        __type__: configs.RoPE_Config
+        base: 10000

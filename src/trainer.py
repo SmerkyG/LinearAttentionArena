@@ -152,17 +152,14 @@ class train_callback(pl.Callback):
         else:
             dataset = trainer.train_dataloader.dataset.datasets
         assert "MyDataset" in str(dataset)
-        dataset.global_rank = trainer.global_rank
-        dataset.real_epoch = int(config.train.epoch_begin + trainer.current_epoch)
-        dataset.world_size = trainer.world_size
-        # print(f'########## world_size {dataset.world_size} global_rank {dataset.global_rank} real_epoch {dataset.real_epoch} ##########')
+        # print(f'########## world_size {trainer.world_size} global_rank {trainer.global_rank} real_epoch {trainer.real_epoch} ##########')
 
     def on_train_epoch_end(self, trainer, pl_module):
         config = self.config
         to_save_dict = {}
-        real_current_epoch = int(config.train.epoch_begin + trainer.current_epoch)
+        real_current_epoch = trainer.current_epoch
         if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy):  # save pth
-            if (config.train.epoch_save > 0 and real_current_epoch % config.train.epoch_save == 0) or (real_current_epoch == config.train.epoch_count - 1):
+            if (config.train.epoch_save > 0 and (real_current_epoch+1) % config.train.epoch_save == 0) or (real_current_epoch == config.runtime.epoch_count - 1):
                 if config.train.data_type == 'wds_img':
                     raw_dict = pl_module.state_dict()
                     for k in raw_dict:
@@ -174,13 +171,13 @@ class train_callback(pl.Callback):
                     my_save(
                         config, trainer,
                         to_save_dict,
-                        f"{config.train.proj_dir}/rwkv-{config.train.epoch_begin + trainer.current_epoch}.pth",
+                        f"{config.train.proj_dir}/rwkv-{trainer.current_epoch}.pth",
                     )
                 except Exception as e:
                     print('Error\n\n', e, '\n\n')
 
         if trainer.is_global_zero:  # logging
-            trainer.my_log.write(f"{real_current_epoch} {trainer.my_epoch_loss:.6f} {math.exp(trainer.my_epoch_loss):.4f} {trainer.my_lr:.8f} {datetime.datetime.now()} {trainer.current_epoch}\n")
+            trainer.my_log.write(f"{real_current_epoch} {trainer.my_epoch_loss:.6f} {math.exp(trainer.my_epoch_loss):.4f} {trainer.my_lr:.8f} {trainer.my_lr2:.8f} {datetime.datetime.now()} {real_current_epoch - config.train.epoch_begin}\n")
             trainer.my_log.flush()
 
             trainer.my_loss_sum = 0

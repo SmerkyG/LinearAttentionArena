@@ -200,11 +200,9 @@ class EvalHarnessAdapter(TemplateLM):
 
         for COUNTER in range(len(requests)):
             n = COUNTER
-            raw_src = requests[n][0][0] + requests[n][0][1]
 
             src = requests[n][1] + requests[n][2]
 
-            raw_src = '\n' + raw_src
             src = RWKV_PAD + src
             inputs = torch.tensor(src, dtype=torch.long, device=model.device, requires_grad=False).unsqueeze(0)
 
