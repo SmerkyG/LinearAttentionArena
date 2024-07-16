@@ -54,12 +54,12 @@ os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size_a)
 model_path = config.path
 
 # Setup the model
-from src.model import RWKV
+from src.model import Transformer
 
 print(f'Loading model - {model_path}')
 state_dict = torch.load(model_path, mmap=True)
 with torch.device('meta'):
-    model = RWKV(config)
+    model = Transformer(config)
 model.load_state_dict(state_dict, assign=True)
 
 match config.precision:
@@ -204,7 +204,7 @@ class EvalHarnessAdapter(TemplateLM):
             src = requests[n][1] + requests[n][2]
 
             src = RWKV_PAD + src
-            inputs = torch.tensor(src, dtype=torch.long, device=model.device, requires_grad=False).unsqueeze(0)
+            inputs = torch.tensor(src, dtype=torch.long, device=device, requires_grad=False).unsqueeze(0)
 
             sss = str(src)
 

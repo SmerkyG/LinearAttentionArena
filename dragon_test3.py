@@ -80,9 +80,9 @@ os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size_a)
 # Setup the model
 import lightning as pl
 #trainer = pl.Trainer(precision=32)
-from src.model import RWKV
+from src.model import Transformer
 #with trainer.init_module(empty_init=True):
-#    model = RWKV(config)
+#    model = Transformer(config)
 
 
 MODEL_PATH = config.path
@@ -92,7 +92,7 @@ print(f"########## Loading {model_path}... ##########")
 
 state_dict = torch.load(model_path, mmap=True)
 with torch.device('meta'):
-    model = RWKV(config)
+    model = Transformer(config)
 model.load_state_dict(state_dict, assign=True)
 
 #model.load_state_dict(load_dict)

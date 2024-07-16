@@ -26,8 +26,6 @@ import src.cmix_x060
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
 
-import src.metrics as metrics
-
 import numpy as np
 
 if importlib.util.find_spec('deepspeed'):
@@ -36,8 +34,7 @@ if importlib.util.find_spec('deepspeed'):
 
 from .CoreDependencies import *
 
-def console_clear_last_line():
-    print('\033[1A', end='\x1b[2K')
+from src.logger import print0 as print
 
 try:
     print('RWKV_MODEL_TYPE', os.environ["RWKV_MODEL_TYPE"])
@@ -72,73 +69,72 @@ def get_second_submodel_layer_id(model_config:Model_Config):
     return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
 
 class Block(nn.Module):
-    def __init__(self, config:TrainerCLI_Config, layer_id):
+    def __init__(self, config:Model_Config, layer_id):
         super().__init__()
         self.config = config
-        self.args = args = config.model
         self.layer_id = layer_id
 
-        self.ln1 = nn.LayerNorm(args.n_embd)
-        self.ln2 = nn.LayerNorm(args.n_embd)
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
 
         if self.layer_id == 0:
-            self.ln0 = nn.LayerNorm(args.n_embd)
+            self.ln0 = nn.LayerNorm(config.n_embd)
 
         self.parallel = False
 
-        ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(args, layer_id)
+        ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(config, layer_id)
 
         mt = os.environ["RWKV_MODEL_TYPE"]
         if 'parallel' in mt:
             self.parallel = True
 
         if mt.startswith('x060bbswa'):
-            attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id)
+            attFactory = lambda: RWKV_Tmix_x060bbswa(config, layer_id)
         elif mt.startswith('x060b5'):
-            attFactory = lambda: src.tmix_x060b5.RWKV_Tmix_x060b5(args, layer_id)
+            attFactory = lambda: src.tmix_x060b5.RWKV_Tmix_x060b5(config, layer_id)
         elif mt.startswith('x060c2'):
-            attFactory = lambda: src.tmix_x060c2.RWKV_Tmix_x060c2(args, layer_id)
+            attFactory = lambda: src.tmix_x060c2.RWKV_Tmix_x060c2(config, layer_id)
         elif mt.startswith('x060b'):
-            attFactory = lambda: src.tmix_x060b.RWKV_Tmix_x060b(args, layer_id)
+            attFactory = lambda: src.tmix_x060b.RWKV_Tmix_x060b(config, layer_id)
         elif mt.startswith('x060o3'):
-            attFactory = lambda: src.tmix_x060o3.RWKV_Tmix_x060o3(args, layer_id)
+            attFactory = lambda: src.tmix_x060o3.RWKV_Tmix_x060o3(config, layer_id)
         elif mt.startswith('x052'):
-            attFactory = lambda: src.tmix_x052.RWKV_Tmix_x052(args, layer_id)
-            ffnFactory = lambda: src.cmix_x052.RWKV_CMix_x052(args, layer_id)
+            attFactory = lambda: src.tmix_x052.RWKV_Tmix_x052(config, layer_id)
+            ffnFactory = lambda: src.cmix_x052.RWKV_CMix_x052(config, layer_id)
         elif mt.startswith('x060'):
-            attFactory = lambda: src.tmix_x060.RWKV_Tmix_x060(args, layer_id)
+            attFactory = lambda: src.tmix_x060.RWKV_Tmix_x060(config, layer_id)
         elif mt.startswith('gptalpha'):
-            attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id)
-        elif mt.startswith('llama3'):
-            attFactory = lambda: src.tmix_llama3.Llama3_Tmix(args, layer_id)
-            ffnFactory = lambda: src.tmix_llama3.Llama3_CMix(args, layer_id)
+            attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(config, layer_id)
+        elif mt.startswith('llama'):
+            attFactory = lambda: src.tmix_llama.Llama_Tmix(config, layer_id)
+            ffnFactory = lambda: src.tmix_llama.Llama_CMix(config, layer_id)
         elif mt.startswith('mamba'):
-            attFactory = lambda: src.tmix_mamba.Mamba(args, layer_id)
-            ffnFactory = lambda: src.tmix_mamba.MambaFFN(args, layer_id)
+            attFactory = lambda: src.tmix_mamba.Mamba(config, layer_id)
+            ffnFactory = lambda: src.tmix_mamba.MambaFFN(config, layer_id)
         else:
             print(f"Unsupported model type: {mt}")
             exit(0)
         
         if '_taylor' in mt:
-            if layer_id >= get_second_submodel_layer_id(args): #args.n_layer * 2 // 3 - 1 and layer_id < args.n_layer - 1:
+            if layer_id >= get_second_submodel_layer_id(config): #config.n_layer * 2 // 3 - 1 and layer_id < config.n_layer - 1:
                 if 'taylorchunked' in mt:
-                    attFactory = lambda: src.tmix_taylorchunked.RWKV_Tmix_taylorchunked(args, layer_id)
+                    attFactory = lambda: src.tmix_taylorchunked.RWKV_Tmix_taylorchunked(config, layer_id)
                 else:
-                    attFactory = lambda: src.tmix_taylor.RWKV_Tmix_taylor(args, layer_id)
+                    attFactory = lambda: src.tmix_taylor.RWKV_Tmix_taylor(config, layer_id)
 
         if '_gptalpha' in mt:
-            if layer_id >= get_second_submodel_layer_id(args):
-                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id)
+            if layer_id >= get_second_submodel_layer_id(config):
+                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(config, layer_id)
 
         self.is_cache_once = '_gold' in mt
         if self.is_cache_once:
-            if layer_id >= get_second_submodel_layer_id(args) and layer_id < args.n_layer:
+            if layer_id >= get_second_submodel_layer_id(config) and layer_id < config.n_layer:
                 if '_goldbha' in mt:
-                    attFactory = lambda: src.tmix_goldbha.GPTAlpha_Tmix_goldbha(args, layer_id)
+                    attFactory = lambda: src.tmix_goldbha.GPTAlpha_Tmix_goldbha(config, layer_id)
                 else:
-                    attFactory = lambda: src.tmix_gold.GPTAlpha_Tmix_gold(args, layer_id)
+                    attFactory = lambda: src.tmix_gold.GPTAlpha_Tmix_gold(config, layer_id)
                 if mt.startswith('mamba'):
-                    ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(args, layer_id)
+                    ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(config, layer_id)
 
         self.att = attFactory()
         
@@ -149,18 +145,14 @@ class Block(nn.Module):
             self.ffn = ffnFactory()
 
 
-        if args.dropout > 0:
-            self.drop0 = nn.Dropout(p = args.dropout)
-            self.drop1 = nn.Dropout(p = args.dropout)
+        if config.dropout > 0:
+            self.drop0 = nn.Dropout(p = config.dropout)
+            self.drop1 = nn.Dropout(p = config.dropout)
         else:
             self.drop0 = nn.Identity()
             self.drop1 = nn.Identity()
 
-
-    @TCompile
     def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
-        args = self.args
-
         B, T, C = x.size()
         # if self.layer_id == 0:
         #     x = self.ln0(x)
@@ -189,23 +181,6 @@ class Block(nn.Module):
         return x, BlockState(time_mix_state, channel_mix_state)
 
 
-class L2Wrap(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, loss, y):
-        ctx.save_for_backward(y)
-        return loss
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        y = ctx.saved_tensors[0]
-        # to encourage the logits to be close to 0
-        factor = 1e-4 / (y.shape[0] * y.shape[1])
-        maxx, ids = torch.max(y, -1, keepdim=True)
-        gy = torch.zeros_like(y)
-        gy.scatter_(-1, ids, maxx * factor)
-        return (grad_output, gy)
-
-
 def causal_bias_mask(T):
     return torch.full((T, T), float('-inf')).triu(1)
 
@@ -227,10 +202,9 @@ class AlibiMask(nn.Module):
     def forward(self, q:Tensor):
         return self.mask[:, :q.size(-2), :q.size(-2)]
 
-class RWKV(pl.LightningModule):
+class Transformer(nn.Module):
     def __init__(self, config:TrainerCLI_Config):
         super().__init__()
-        self.metrics = dict(loss=metrics.Loss(), acc=metrics.Accuracy())
 
         self.config = config
 
@@ -247,13 +221,13 @@ class RWKV(pl.LightningModule):
 
         mt = os.environ["RWKV_MODEL_TYPE"]
         self.is_cache_once = '_gold' in mt
-        self.is_llama = mt.startswith('llama3')
+        self.is_llama = mt.startswith('llama')
 
         self.shared = Shared()
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
-        self.blocks = nn.ModuleList([Block(config, i) for i in range(args.n_layer)])
+        self.blocks = nn.ModuleList([Block(config.model, i) for i in range(args.n_layer)])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
@@ -268,83 +242,6 @@ class RWKV(pl.LightningModule):
             self.w_kv_cache_a = nn.Linear(args.n_embd, int(args.n_embd / args.kv_cache_compression_ratio), bias=False)
             self.w_kv_cache_b = nn.Linear(int(args.n_embd / args.kv_cache_compression_ratio) + args.n_embd, args.dim_att, bias=False)
 
-
-    def configure_optimizers(self):
-        train_config = self.config.train
-        
-        lr_decay = set()
-        lr_1x = set()
-        lr_2x = set()
-        lr_3x = set()
-        for n, p in self.named_parameters():
-            if not p.requires_grad:
-                continue
-            if (("_w1" in n) or ("_w2" in n)) and (train_config.layerwise_lr > 0):
-                lr_1x.add(n)
-            elif (("time_mix" in n) or ("time_maa" in n)) and (train_config.layerwise_lr > 0):
-                if train_config.train_stage == 2:
-                    lr_2x.add(n)
-                else:
-                    lr_1x.add(n)
-            elif (("time_decay" in n) or ("time_daaaa" in n)) and (train_config.layerwise_lr > 0):
-                if train_config.train_stage == 2:
-                    lr_3x.add(n)
-                else:
-                    lr_2x.add(n)
-            elif ("time_faaaa" in n) and (train_config.layerwise_lr > 0):
-                if train_config.train_stage == 2:
-                    lr_2x.add(n)
-                else:
-                    lr_1x.add(n)
-            elif ("time_first" in n) and (train_config.layerwise_lr > 0):
-                lr_3x.add(n)
-            elif ('.A_log' in n) or n.endswith('.bias'): # mamba
-                lr_1x.add(n)
-            elif (len(p.squeeze().shape) >= 2) and (train_config.weight_decay > 0):
-                lr_decay.add(n)
-            else:
-                lr_1x.add(n)
-
-        param_dict = {n: p for n, p in self.named_parameters()}
-        param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x)
-        if not train_config.load_partial:
-            assert sorted(param_dict) == sorted(param_check)
-
-        lr_decay = sorted(list(lr_decay))
-        lr_1x = sorted(list(lr_1x))
-        lr_2x = sorted(list(lr_2x))
-        lr_3x = sorted(list(lr_3x))
-        
-        if self.trainer.is_global_zero:
-            print('decay', lr_decay, '\n')
-            print('1x', lr_1x, '\n')
-            print('2x', lr_2x, '\n')
-            print('3x', lr_3x, '\n')
-
-        
-        optim_groups = [
-            {"params": [param_dict[n] for n in lr_1x], "weight_decay": 0.0, "my_lr_scale": 1.0, 'name':'lr_1x'},
-        ]
-        if len(lr_2x) > 0:
-            optim_groups += [{"params": [param_dict[n] for n in lr_2x], "weight_decay": 0.0, "my_lr_scale": 2.0, 'name':'lr_2x'}]
-        if len(lr_3x) > 0:
-            optim_groups += [{"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0, 'name':'lr_3x'}]
-        if len(lr_decay) > 0:
-            optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": train_config.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
-
-        betas = (train_config.beta1, train_config.beta2)
-        if self.deepspeed_offload:
-            return DeepSpeedCPUAdam(optim_groups, lr=train_config.lr_init, betas=betas, eps=train_config.adam_eps, bias_correction=True, adamw_mode=True, amsgrad=False)
-        return FusedAdam(optim_groups, lr=train_config.lr_init, betas=betas, eps=train_config.adam_eps, bias_correction=True, adam_w_mode=True, amsgrad=False)
-
-    @property
-    def deepspeed_offload(self) -> bool:
-        strategy = self.trainer.strategy
-        if isinstance(strategy, DeepSpeedStrategy):
-            cfg = strategy.config["zero_optimization"]
-            return cfg.get("offload_optimizer") or cfg.get("offload_param")
-        return False
-
     def ckpt(self, block, *block_args):
         if block.training and self.config.train.grad_cp == 1:
             if "deepspeed" in self.config.train.strategy:
@@ -355,6 +252,7 @@ class RWKV(pl.LightningModule):
             x, next_block_state = block(*block_args)
         return x, next_block_state
 
+    @TCompile
     def forward(self, idx, last_model_state:ModelState|None = None):
         config : Transformer_Config = self.config.model
         B, T = idx.size()
@@ -432,95 +330,69 @@ class RWKV(pl.LightningModule):
         next_model_state.k_cache = k_cache
         return x, next_model_state
 
-    def _get_loss_logits_preds(self, batch, batch_idx, last_model_state):
-        x, y = batch
-        logits, next_model_state = self(x, last_model_state)
-    
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
-        with torch.no_grad():
-            preds = logits.argmax(dim=-1)
+    def get_optim_groups(self):
+        train_config = self.config.train
 
-        if loss.isinf().any():
-            raise Exception("loss was infinite")
+        lr_decay = set()
+        lr_1x = set()
+        lr_2x = set()
+        lr_3x = set()
+        for n, p in self.named_parameters():
+            if not p.requires_grad:
+                continue
+            if (("_w1" in n) or ("_w2" in n)) and (train_config.layerwise_lr > 0):
+                lr_1x.add(n)
+            elif (("time_mix" in n) or ("time_maa" in n)) and (train_config.layerwise_lr > 0):
+                if train_config.train_stage == 2:
+                    lr_2x.add(n)
+                else:
+                    lr_1x.add(n)
+            elif (("time_decay" in n) or ("time_daaaa" in n)) and (train_config.layerwise_lr > 0):
+                if train_config.train_stage == 2:
+                    lr_3x.add(n)
+                else:
+                    lr_2x.add(n)
+            elif ("time_faaaa" in n) and (train_config.layerwise_lr > 0):
+                if train_config.train_stage == 2:
+                    lr_2x.add(n)
+                else:
+                    lr_1x.add(n)
+            elif ("time_first" in n) and (train_config.layerwise_lr > 0):
+                lr_3x.add(n)
+            elif ('.A_log' in n) or n.endswith('.bias'): # mamba
+                lr_1x.add(n)
+            elif (len(p.squeeze().shape) >= 2) and (train_config.weight_decay > 0):
+                lr_decay.add(n)
+            else:
+                lr_1x.add(n)
 
-        if loss.isnan().any():
-            raise Exception("loss was NaN")
+        param_dict = {n: p for n, p in self.named_parameters()}
+        param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x)
+        if not train_config.load_partial:
+            assert sorted(param_dict) == sorted(param_check)
 
-        return loss, logits, preds, next_model_state
-    
-    def get_real_global_step(self): return int(self.trainer.global_step + self.config.train.epoch_begin * self.config.runtime.epoch_global_steps)
-    def get_real_tokens(self): return self.get_real_global_step() * self.config.model.ctx_len * self.config.runtime.global_step_bsz
+        lr_decay = sorted(list(lr_decay))
+        lr_1x = sorted(list(lr_1x))
+        lr_2x = sorted(list(lr_2x))
+        lr_3x = sorted(list(lr_3x))
+        
+        print('decay', lr_decay, '\n')
+        print('1x', lr_1x, '\n')
+        print('2x', lr_2x, '\n')
+        print('3x', lr_3x, '\n')
 
-    def training_step(self, batch, batch_idx):
-        inputs, labels = batch
+        
+        optim_groups = [
+            {"params": [param_dict[n] for n in lr_1x], "weight_decay": 0.0, "my_lr_scale": 1.0, 'name':'lr_1x'},
+        ]
+        if len(lr_2x) > 0:
+            optim_groups += [{"params": [param_dict[n] for n in lr_2x], "weight_decay": 0.0, "my_lr_scale": 2.0, 'name':'lr_2x'}]
+        if len(lr_3x) > 0:
+            optim_groups += [{"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0, 'name':'lr_3x'}]
+        if len(lr_decay) > 0:
+            optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": train_config.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
 
-        model_state = None
-
-        loss, logits, preds, model_state = self._get_loss_logits_preds((inputs, labels), batch_idx, model_state)
-        margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
-        # FIXME - sync from other devices/nodes here
-        for metric in self.metrics.values():
-            metric.update(margs)
-        if self.trainer.is_global_zero:
-            self.log("loss", float(loss), prog_bar=True, on_step=True)#, rank_zero_only=True)
-            if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
-                if (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
-                    logdict = dict(tokens = self.get_real_tokens())
-                    #str = f"epoch:{self.current_epoch} token:{self.all_nodes_tokens_processed:,} step:{batch_idx} "
-                    for name, metric in self.metrics.items():
-                        metric_value = metric.compute()
-                        logdict['train/' + name] = metric_value
-                        metric.clear()
-                        #str += f'{name}:{metric_value:.4f} '
-                    #str += f"{gb:.1f}gb {int(ms_per)}ms {ktok_per_sec:.2f}kT/s {self.total_runtime:.1f}sec"
-                    #print(str)
-                    if len(self.config.train.wandb) > 0:
-                        self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
-
-        return L2Wrap.apply(loss, logits)
-
-    def on_validation_epoch_start(self):
-        if self.trainer.is_global_zero:
-            print(f"STARTING VALIDATION")
-            print()
-
-            # clear metrics
-            for metric in self.metrics.values():
-                metric.compute()
-
-    def on_validation_epoch_end(self):
-        if self.trainer.is_global_zero:
-            logdict = dict(tokens = self.get_real_tokens())
-            str = f"VALIDATION COMPLETE. "
-            for name, metric in self.metrics.items():
-                metric_value = metric.compute()
-                logdict["val/" + name] = metric_value
-                str += f"{metric_value:.4f} "
-                metric.clear()
-            if len(self.config.train.wandb) > 0:
-                self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
-
-            console_clear_last_line()
-            print(str)
-            print()
-
-    def validation_step(self, batch, batch_idx):
-        inputs, labels = batch
-        loss, logits, preds, next_block_states = self._get_loss_logits_preds(batch, batch_idx, None)
-        margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
-        for name, metric in self.metrics.items():
-            metric.update(margs)
-            # on_epoch causes this to be logged in aggregate rather than per batch
-            #self.log('val/'+name, metric.compute(), on_epoch=True, rank_zero_only=True)
-            #metric.clear()
-        #self.log("tokens", float(self.all_nodes_tokens_processed), on_epoch=True, rank_zero_only=True)
-        return loss
-
-    # def training_step_end(self, batch_parts):
-    #     if pl.__version__[0]!='2':
-    #         all = self.all_gather(batch_parts)
-    #         if self.trainer.is_global_zero:
-    #             self.trainer.my_loss_all = all
+        return optim_groups
 
     def generate_init_weight(self):
         print(

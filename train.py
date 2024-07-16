@@ -146,7 +146,8 @@ if __name__ == "__main__":
     from src.trainer import train_callback, generate_init_weight
     from src.dataset import MyDataset, MMapDataset
 
-    from src.model import RWKV
+    from src.lit import LightningModelWrapper
+    from src.model import Transformer
 
     # FIXME - why use_distributed_sampler=False? was this an oversight in the original repo? is this related to replace_sampler_ddp from Bo's code?
     trainer = Trainer(
@@ -169,7 +170,8 @@ if __name__ == "__main__":
                         val_check_interval=config.train.val_check_interval)
 
     with trainer.init_module(empty_init=True):
-        model = RWKV(config)
+        model = Transformer(config)
+        wrapper = LightningModelWrapper(model, config)
 
     if len(config.train.load_model) == 0 or config.train.train_stage == 1:  # should we build the initial weights?
         init_weight_name = f"{config.train.proj_dir}/rwkv-init.pth"
@@ -228,4 +230,4 @@ if __name__ == "__main__":
     if config.train.validation_data_file != "":
         validation_data_loader = DataLoader(validation_data, shuffle=False, pin_memory=True, batch_size=config.train.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
 
-    trainer.fit(model, train_dataloaders=train_data_loader, val_dataloaders=validation_data_loader)
+    trainer.fit(wrapper, train_dataloaders=train_data_loader, val_dataloaders=validation_data_loader)

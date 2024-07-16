@@ -6,6 +6,8 @@ from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 
 from configs import TrainerCLI_Config
 
+from src.logger import print0 as print
+
 def my_save(config:TrainerCLI_Config, trainer:pl.Trainer, dd, ff):
     if 'deepspeed_stage_3' in config.train.strategy:
         trainer.save_checkpoint(ff, weights_only=True)

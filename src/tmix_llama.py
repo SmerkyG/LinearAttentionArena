@@ -9,7 +9,7 @@ from .cmix import ChannelMixState
 
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 
-class Llama3_CMix(MyModule):
+class Llama_CMix(MyModule):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -24,8 +24,8 @@ class Llama3_CMix(MyModule):
     def forward(self, x, last_state:ChannelMixState):
         return self.w2(F.silu(self.w1(x)) * self.w3(x)), last_state
 
-class Llama3_Tmix(MyModule):
-    def __init__(self, args, layer_id, angles, bias_mask):
+class Llama_Tmix(MyModule):
+    def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
@@ -40,19 +40,10 @@ class Llama3_Tmix(MyModule):
         self.wv = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.wo = nn.Linear(args.dim_att, args.n_embd, bias=False)
 
-        #self.register_buffer('angles', generate_rotary_embedding(args.ctx_len * 2, self.head_size), persistent=False)
-        #self.register_buffer('angles', torch.zeros(0))
-        self.angles = angles
-        self.bias_mask = bias_mask
-
     @MyFunction
     def forward(self, x, xo, kv_cache, last_timemix_state:TimeMixState, shared:Shared):
         B, L, D = x.size()
         H = self.n_head
-
-        #if getattr(self, 'angles', None) is None:
-        #if self.angles.size(0) == 0:
-        #    self.angles = generate_rotary_embedding(self.ctx_len * 2, self.head_size).to(device=x.device, dtype=x.dtype)
 
         q = self.wq(x) 
         k = self.wk(x)
