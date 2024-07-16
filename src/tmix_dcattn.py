@@ -72,7 +72,7 @@ class RWKV_Tmix_dcattn(MyModule):
         self.layer_id = layer_id
         self.n_layer = args.n_layer
 
-        self.k_head_size = self.v_head_size = self.head_size = args.head_size_a
+        self.k_head_size = self.v_head_size = self.head_size = args.head_size
         self.n_kv_head = self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
 

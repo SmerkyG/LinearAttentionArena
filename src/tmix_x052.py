@@ -2,18 +2,17 @@ import torch
 from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda5 import RUN_CUDA_RWKV5
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
+
+from configs import Transformer_Config
 
 class RWKV_Tmix_x052(MyModule):
-    def __init__(self, args, layer_id):
+    def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
 
-        global HEAD_SIZE
-
-        self.head_size = args.head_size_a
-        assert HEAD_SIZE == self.head_size # change HEAD_SIZE to match args.head_size_a
+        self.head_size = args.head_size
         self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
         self.head_size_divisor = args.head_size_divisor
@@ -55,7 +54,7 @@ class RWKV_Tmix_x052(MyModule):
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att)
 
     @MyFunction
-    def jit_func(self, x, xo, kv_cache, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         xx = self.time_shift(x) # Mix x with the previous timestep to produce xk, xv, xr
         xk = x * self.time_mix_k + xx * (1 - self.time_mix_k)

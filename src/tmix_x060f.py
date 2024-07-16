@@ -14,8 +14,8 @@ class RWKV_Tmix_x060f(MyModule):
         self.dim_k = args.n_embd
         self.dim_v = args.n_embd
 
-        self.k_head_size = args.head_size_a
-        self.v_head_size = int(args.head_size_a * self.dim_v / self.dim_k)
+        self.k_head_size = args.head_size
+        self.v_head_size = int(args.head_size * self.dim_v / self.dim_k)
         self.n_head = args.dim_att // self.k_head_size
         assert args.dim_att % self.n_head == 0
 

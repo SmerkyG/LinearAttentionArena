@@ -69,7 +69,7 @@ class Args(dict):
          self[name] = value
 
 args = Args()
-args.head_size_a=64
+args.head_size=64
 args.ctx_len=2048
 args.n_layer=24
 args.n_embd=2048

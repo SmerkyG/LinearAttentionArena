@@ -1,7 +1,3 @@
-########################################################################################################
-# The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
-########################################################################################################
-
 from dataclasses import dataclass
 from configs import parse_cmdline_configs, TrainerCLI_Config, Model_Config, Runtime_Config, Config
 import logging
@@ -39,48 +35,46 @@ if __name__ == "__main__":
     runtime_config = Runtime_Config()
     config.runtime = runtime_config
     runtime_config.my_timestamp = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
-    #args.check_val_every_n_epoch = int(1e20)
-    #args.log_every_n_steps = int(1e20)
-    #lit_args.max_epochs = -1  # continue forever
     runtime_config.global_step_bsz = int(config.train.num_nodes) * int(config.train.devices) * config.train.micro_bsz * config.train.accumulate_grad_batches
     os.environ["RWKV_MODEL_TYPE"] = config.model.model_type
     os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
-    os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size_a)
+    os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
 
     runtime_config.run_name = f"{config.model.model_type} L{config.model.n_layer} D{config.model.n_embd} ctx{config.model.ctx_len} "
     if not os.path.exists(config.train.proj_dir):
         os.makedirs(config.train.proj_dir)
 
-    if config.train.train_stage > 0:
-        runtime_config.epoch_count = config.train.magic_prime // 40320
+    assert config.train.train_stage > 0
 
-        runtime_config.epoch_global_steps = 40320 // runtime_config.global_step_bsz
-        assert runtime_config.epoch_global_steps * runtime_config.global_step_bsz == 40320
-        if config.train.train_stage >= 2:  # find latest saved model
-            list_p = []
-            for p in os.listdir(config.train.proj_dir):
-                if p.startswith("rwkv") and p.endswith(".pth"):
-                    p = ((p.split("-"))[1].split("."))[0]
-                    if p != "final":
-                        if p == "init":
-                            p = -1
-                        else:
-                            p = int(p)
-                        list_p += [p]
-            list_p.sort()
-            max_p = list_p[-1]
-            if len(list_p) > 1:
-                runtime_config.my_pile_prev_p = list_p[-2]  # in case max_p is corrupted
-            if max_p == -1:
-                config.train.load_model = f"{config.train.proj_dir}/rwkv-init.pth"
-            else:
-                config.train.load_model = f"{config.train.proj_dir}/rwkv-{max_p}.pth"
-                if config.train.warmup_steps < 0:
-                    if config.train.train_stage == 2:
-                        config.train.warmup_steps = 10
+    runtime_config.epoch_count = config.train.magic_prime // 40320
+
+    runtime_config.epoch_global_steps = 40320 // runtime_config.global_step_bsz
+    assert runtime_config.epoch_global_steps * runtime_config.global_step_bsz == 40320
+    if config.train.train_stage >= 2:  # find latest saved model
+        list_p = []
+        for p in os.listdir(config.train.proj_dir):
+            if p.startswith("rwkv") and p.endswith(".pth"):
+                p = ((p.split("-"))[1].split("."))[0]
+                if p != "final":
+                    if p == "init":
+                        p = -1
                     else:
-                        config.train.warmup_steps = 30
-            config.train.epoch_begin = max_p + 1
+                        p = int(p)
+                    list_p += [p]
+        list_p.sort()
+        max_p = list_p[-1]
+        if len(list_p) > 1:
+            runtime_config.my_pile_prev_p = list_p[-2]  # in case max_p is corrupted
+        if max_p == -1:
+            config.train.load_model = f"{config.train.proj_dir}/rwkv-init.pth"
+        else:
+            config.train.load_model = f"{config.train.proj_dir}/rwkv-{max_p}.pth"
+            if config.train.warmup_steps < 0:
+                if config.train.train_stage == 2:
+                    config.train.warmup_steps = 10
+                else:
+                    config.train.warmup_steps = 30
+        config.train.epoch_begin = max_p + 1
 
     samples_per_epoch = runtime_config.epoch_global_steps * runtime_config.global_step_bsz
     tokens_per_epoch = samples_per_epoch * config.model.ctx_len
@@ -179,24 +173,7 @@ if __name__ == "__main__":
         config.train.load_model = init_weight_name
 
     rank_zero_info(f"########## Loading {config.train.load_model}... ##########")
-    try:
-        load_dict = torch.load(config.train.load_model, map_location="cpu")
-        load_keys = list(load_dict.keys())
-        for k in load_keys:
-            if k.startswith("_forward_module."):
-                load_dict[k.replace("_forward_module.", "")] = load_dict[k]
-                del load_dict[k]
-    except:
-        rank_zero_info(f"Bad checkpoint {config.train.load_model}")
-        if config.train.train_stage >= 2:  # try again using another checkpoint
-            max_p = runtime_config.my_pile_prev_p
-            if max_p == -1:
-                config.train.load_model = f"{config.train.proj_dir}/rwkv-init.pth"
-            else:
-                config.train.load_model = f"{config.train.proj_dir}/rwkv-{max_p}.pth"
-            config.train.epoch_begin = max_p + 1
-            rank_zero_info(f"Trying {config.train.load_model}")
-            load_dict = torch.load(config.train.load_model, map_location="cpu")
+    load_dict = torch.load(config.train.load_model, map_location="cpu")
 
     if config.train.load_partial == 1:
         load_keys = load_dict.keys()
@@ -221,7 +198,6 @@ if __name__ == "__main__":
     train_data = MyDataset(config, trainer)
     if config.train.validation_data_file != "":
         validation_data = MMapDataset(config.train.validation_data_file, config.model.ctx_len)
-    #validation_data = Subset(validation_data, range(1024)) # FIXME - hack to shorten val dataset
     config.model.vocab_size = train_data.vocab_size
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)

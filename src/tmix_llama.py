@@ -31,7 +31,7 @@ class Llama_Tmix(MyModule):
         self.layer_id = layer_id
         self.ctx_len = args.ctx_len
 
-        self.head_size = args.head_size_a
+        self.head_size = args.head_size
         self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
 

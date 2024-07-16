@@ -49,7 +49,7 @@ if errors != '':
 
 os.environ["RWKV_MODEL_TYPE"] = config.model.model_type
 os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
-os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size_a)
+os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
 
 model_path = config.path
 

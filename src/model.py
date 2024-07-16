@@ -192,16 +192,6 @@ def alibi_mask(T, H):
     bias = bias * head_bias_slopes # (H, T, T)
     return bias
 
-class AlibiMask(nn.Module):
-    def __init__(self, block_size : int, n_heads : int, layer_id : int):
-        super().__init__()
-        T = block_size
-        H = n_heads
-        self.register_buffer('mask', alibi_mask(T, H))
-
-    def forward(self, q:Tensor):
-        return self.mask[:, :q.size(-2), :q.size(-2)]
-
 class Transformer(nn.Module):
     def __init__(self, config:TrainerCLI_Config):
         super().__init__()
@@ -259,9 +249,9 @@ class Transformer(nn.Module):
 
         shared = self.shared
         if config.rope is not None and shared.angles.size(0) == 0:
-            shared.angles = generate_rotary_embedding(config.ctx_len, config.head_size_a, config.rope.base * config.rope.rebase, config.rope.rescale).to(idx.device)
+            shared.angles = generate_rotary_embedding(config.ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale).to(idx.device)
         elif config.brope is not None and shared.angles.size(0) == 0:
-            shared.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size_a, config.brope.rescale).to(idx.device)
+            shared.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size, config.brope.rescale).to(idx.device)
         elif config.alibi is not None and self.bias_mask.size(0) == 0:
             shared.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head).to(idx.device)
 
@@ -279,7 +269,7 @@ class Transformer(nn.Module):
             #dtype = x.dtype
             last_model_state = ModelState()
 
-            wkv_state_shape = [B, config.dim_att//config.head_size_a, config.head_size_a, config.head_size_a]
+            wkv_state_shape = [B, config.dim_att//config.head_size, config.head_size, config.head_size]
             if self.is_llama:
                 wkv_state_shape = [B, 0, config.dim_att * 2]
             last_model_state.block_states = [
@@ -486,9 +476,6 @@ class Transformer(nn.Module):
                     nn.init.uniform_(m[n], a=scale, b=-scale)
                 else:
                     nn.init.orthogonal_(m[n], gain=scale)
-
-            # if 'blocks.23' in n or 'blocks.' not in n:
-            #     print(n, m[n])
 
             m[n] = m[n].cpu()
             if os.environ["RWKV_FLOAT_MODE"] == "fp16":
