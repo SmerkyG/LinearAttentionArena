@@ -8,11 +8,11 @@ from configs import TrainerCLI_Config
 
 from src.logger import print0 as print
 
-def my_save(config:TrainerCLI_Config, trainer:pl.Trainer, dd, ff):
+def my_save(config:TrainerCLI_Config, trainer:pl.Trainer, state_dict, path):
     if 'deepspeed_stage_3' in config.train.strategy:
-        trainer.save_checkpoint(ff, weights_only=True)
+        trainer.save_checkpoint(path, weights_only=True)
     else:
-        torch.save(dd, ff)
+        torch.save(state_dict, path)
 
 class train_callback(pl.Callback):
     def __init__(self, config:TrainerCLI_Config):
@@ -56,7 +56,7 @@ class train_callback(pl.Callback):
                 if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy):
                     my_save(
                         config, trainer,
-                        pl_module.state_dict(),
+                        pl_module.model.state_dict(),
                         f"{config.train.proj_dir}/rwkv-final.pth",
                     )
                     print("!!!TRAINING COMPLETE!!!")
@@ -139,10 +139,9 @@ class train_callback(pl.Callback):
             if config.train.magic_prime > 0:
                 expand_factor = 1
                 if int(real_global_step) == int(config.train.magic_prime * expand_factor // self.config.runtime.global_step_bsz) - 1:
-                    to_save_dict = pl_module.state_dict()
                     my_save(
                         config, trainer,
-                        to_save_dict,
+                        pl_module.model.state_dict(),
                         f"{config.train.proj_dir}/rwkv-final.pth",
                     )
                 
@@ -162,17 +161,10 @@ class train_callback(pl.Callback):
         real_current_epoch = trainer.current_epoch
         if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy):  # save pth
             if (config.train.epoch_save > 0 and (real_current_epoch+1) % config.train.epoch_save == 0) or (real_current_epoch == config.runtime.epoch_count - 1):
-                if config.train.data_type == 'wds_img':
-                    raw_dict = pl_module.state_dict()
-                    for k in raw_dict:
-                        if k.startswith('encoder.') or k.startswith('decoder.'):
-                            to_save_dict[k] = raw_dict[k]
-                else:
-                    to_save_dict = pl_module.state_dict()
                 try:
                     my_save(
                         config, trainer,
-                        to_save_dict,
+                        pl_module.model.state_dict(),
                         f"{config.train.proj_dir}/rwkv-{trainer.current_epoch}.pth",
                     )
                 except Exception as e:
