@@ -38,7 +38,7 @@ class Transformer_Config(Model_Config):
     alibi:Alibi_Config|None = None
 
 @dataclass(kw_only=True)
-class FinchB2_Config(Transformer_Config):
+class FinchC2_Config(Transformer_Config):
     use_one_minus_w:int = 1
     use_v2:int = 1
 

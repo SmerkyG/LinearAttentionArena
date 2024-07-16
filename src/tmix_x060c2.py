@@ -6,10 +6,10 @@ from .cuda6 import RUN_CUDA_RWKV6
 
 from .tmix import TimeMixState
 
-from configs import FinchB2_Config
+from configs import FinchC2_Config
 
-class RWKV_Tmix_x060b2(MyModule):
-    def __init__(self, args:FinchB2_Config, layer_id):
+class RWKV_Tmix_x060c2(MyModule):
+    def __init__(self, args:FinchC2_Config, layer_id):
         super().__init__()
         self.args = args
         self.layer_id = layer_id

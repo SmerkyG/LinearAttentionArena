@@ -1,6 +1,6 @@
 model:
     __type__: configs.Transformer_Config
-    model_type: x060_goco
+    model_type: x060_gold
     inv_other_layer_ratio: 6
 
 train:

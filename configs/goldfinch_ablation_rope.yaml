@@ -1,6 +1,6 @@
 model:
-    __type__: configs.FinchB2_Config
-    model_type: x060b2_goco
+    __type__: configs.FinchC2_Config
+    model_type: x060c2_gold
     inv_other_layer_ratio: 3
     rope:
         __type__: configs.RoPE_Config

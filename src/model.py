@@ -96,8 +96,8 @@ class Block(nn.Module):
             attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id, angles, bias_mask)
         elif mt.startswith('x060b5'):
             attFactory = lambda: src.tmix_x060b5.RWKV_Tmix_x060b5(args, layer_id)
-        elif mt.startswith('x060b2'):
-            attFactory = lambda: src.tmix_x060b2.RWKV_Tmix_x060b2(args, layer_id)
+        elif mt.startswith('x060c2'):
+            attFactory = lambda: src.tmix_x060c2.RWKV_Tmix_x060c2(args, layer_id)
         elif mt.startswith('x060b'):
             attFactory = lambda: src.tmix_x060b.RWKV_Tmix_x060b(args, layer_id)
         elif mt.startswith('x060o3'):
@@ -130,13 +130,13 @@ class Block(nn.Module):
             if layer_id >= get_second_submodel_layer_id(args):
                 attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
 
-        self.is_cache_once = '_goco' in mt
+        self.is_cache_once = '_gold' in mt
         if self.is_cache_once:
             if layer_id >= get_second_submodel_layer_id(args) and layer_id < args.n_layer:
-                if '_gocobha' in mt:
-                    attFactory = lambda: src.tmix_gocobha.GPTAlpha_Tmix_gocobha(args, layer_id, angles, bias_mask)
+                if '_goldbha' in mt:
+                    attFactory = lambda: src.tmix_goldbha.GPTAlpha_Tmix_goldbha(args, layer_id, angles, bias_mask)
                 else:
-                    attFactory = lambda: src.tmix_goco.GPTAlpha_Tmix_goco(args, layer_id, angles, bias_mask)
+                    attFactory = lambda: src.tmix_gold.GPTAlpha_Tmix_gold(args, layer_id, angles, bias_mask)
                 if mt.startswith('mamba'):
                     ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(args, layer_id)
 
@@ -246,7 +246,7 @@ class RWKV(pl.LightningModule):
         assert args.dim_ffn % 32 == 0
 
         mt = os.environ["RWKV_MODEL_TYPE"]
-        self.is_cache_once = '_goco' in mt
+        self.is_cache_once = '_gold' in mt
         self.is_llama = mt.startswith('llama3')
 
         self.angles = None
