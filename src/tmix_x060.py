@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 class RWKV_Tmix_x060(MyModule):
     def __init__(self, args, layer_id):
@@ -56,7 +56,7 @@ class RWKV_Tmix_x060(MyModule):
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
 
     @MyFunction
-    def forward(self, x, xo, kv_cache, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
 

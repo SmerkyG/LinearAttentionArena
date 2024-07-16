@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from typing import Tuple
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 from .cmix import ChannelMixState
 
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
@@ -46,7 +46,7 @@ class Llama3_Tmix(MyModule):
         self.bias_mask = bias_mask
 
     @MyFunction
-    def forward(self, x, xo, kv_cache, last_timemix_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_timemix_state:TimeMixState, shared:Shared):
         B, L, D = x.size()
         H = self.n_head
 
@@ -68,9 +68,7 @@ class Llama3_Tmix(MyModule):
         q = q.view(B,-1,H,D//H).transpose(1,2)
         k = k.view(B,-1,H,D//H).transpose(1,2)
         v = v.view(B,-1,H,D//H).transpose(1,2)
-        if self.angles is not None:
-            self.angles = self.angles.to(x.device)
-            q, k = apply_rotary_embedding(q, k, self.angles)
+        q, k = apply_rotary_embedding(q, k, shared.angles)
         y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=q.size(-2)==k.size(-2))
         y = y.transpose(1,2).reshape(B,L,D)
         y = self.wo(y)

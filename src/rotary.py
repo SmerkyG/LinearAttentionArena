@@ -19,6 +19,9 @@ def generate_binary_rotary_embedding(max_seqlen:int, dim:int, scale:float=1):
     return torch.polar(torch.ones_like(angles), angles)
 
 def apply_rotary_embedding(q, k, angles, seq_dim:int = -2) -> Tuple[Tensor, Tensor]:
+    if angles.size(0) == 0:
+        return q, k
+
     q_dtype, k_dtype = q.dtype, k.dtype
     L = q.size(seq_dim)
     angles = angles[-L:].view(1, 1, L, angles.size(1))

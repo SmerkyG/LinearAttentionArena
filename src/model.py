@@ -13,7 +13,7 @@ import lightning.pytorch as pl
 from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 from lightning.pytorch.strategies import DeepSpeedStrategy
 
-from .tmix import TimeMixState, ModelState
+from .tmix import TimeMixState, ModelState, Shared
 from .cmix import ChannelMixState
 
 import src
@@ -72,7 +72,7 @@ def get_second_submodel_layer_id(model_config:Model_Config):
     return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
 
 class Block(nn.Module):
-    def __init__(self, config:TrainerCLI_Config, layer_id, angles, bias_mask):
+    def __init__(self, config:TrainerCLI_Config, layer_id):
         super().__init__()
         self.config = config
         self.args = args = config.model
@@ -93,7 +93,7 @@ class Block(nn.Module):
             self.parallel = True
 
         if mt.startswith('x060bbswa'):
-            attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id, angles, bias_mask)
+            attFactory = lambda: RWKV_Tmix_x060bbswa(args, layer_id)
         elif mt.startswith('x060b5'):
             attFactory = lambda: src.tmix_x060b5.RWKV_Tmix_x060b5(args, layer_id)
         elif mt.startswith('x060c2'):
@@ -108,9 +108,9 @@ class Block(nn.Module):
         elif mt.startswith('x060'):
             attFactory = lambda: src.tmix_x060.RWKV_Tmix_x060(args, layer_id)
         elif mt.startswith('gptalpha'):
-            attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
+            attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id)
         elif mt.startswith('llama3'):
-            attFactory = lambda: src.tmix_llama3.Llama3_Tmix(args, layer_id, angles, bias_mask)
+            attFactory = lambda: src.tmix_llama3.Llama3_Tmix(args, layer_id)
             ffnFactory = lambda: src.tmix_llama3.Llama3_CMix(args, layer_id)
         elif mt.startswith('mamba'):
             attFactory = lambda: src.tmix_mamba.Mamba(args, layer_id)
@@ -128,15 +128,15 @@ class Block(nn.Module):
 
         if '_gptalpha' in mt:
             if layer_id >= get_second_submodel_layer_id(args):
-                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id, angles, bias_mask)
+                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(args, layer_id)
 
         self.is_cache_once = '_gold' in mt
         if self.is_cache_once:
             if layer_id >= get_second_submodel_layer_id(args) and layer_id < args.n_layer:
                 if '_goldbha' in mt:
-                    attFactory = lambda: src.tmix_goldbha.GPTAlpha_Tmix_goldbha(args, layer_id, angles, bias_mask)
+                    attFactory = lambda: src.tmix_goldbha.GPTAlpha_Tmix_goldbha(args, layer_id)
                 else:
-                    attFactory = lambda: src.tmix_gold.GPTAlpha_Tmix_gold(args, layer_id, angles, bias_mask)
+                    attFactory = lambda: src.tmix_gold.GPTAlpha_Tmix_gold(args, layer_id)
                 if mt.startswith('mamba'):
                     ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(args, layer_id)
 
@@ -158,7 +158,7 @@ class Block(nn.Module):
 
 
     @TCompile
-    def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState):
+    def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
         args = self.args
 
         B, T, C = x.size()
@@ -171,7 +171,7 @@ class Block(nn.Module):
         #     att_x = (att_x, kv_cache)
         if not self.parallel:
             if self.att is not None:
-                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state)
+                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
@@ -182,7 +182,7 @@ class Block(nn.Module):
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
-            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, last_block_state.time_mix_state)
+            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, last_block_state.time_mix_state, shared)
             dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
             x = self.drop0(x + dx_att + dx_ffn)
 
@@ -249,12 +249,11 @@ class RWKV(pl.LightningModule):
         self.is_cache_once = '_gold' in mt
         self.is_llama = mt.startswith('llama3')
 
-        self.angles = None
-        self.bias_mask = None
+        self.shared = Shared()
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
-        self.blocks = nn.ModuleList([Block(config, i, self.angles, self.bias_mask) for i in range(args.n_layer)])
+        self.blocks = nn.ModuleList([Block(config, i) for i in range(args.n_layer)])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
@@ -359,14 +358,16 @@ class RWKV(pl.LightningModule):
     def forward(self, idx, last_model_state:ModelState|None = None):
         config : Transformer_Config = self.config.model
         B, T = idx.size()
-        assert (self.angles is None or T <= self.angles.size(0)) or (self.bias_mask is None or T <= self.bias_mask.size(0))
 
-        if config.rope is not None and self.angles is None:
-            self.angles = generate_rotary_embedding(config.ctx_len, config.head_size_a, config.rope.base * config.rope.rebase, config.rope.rescale)
-        elif config.brope is not None and self.angles is None:
-            self.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size_a, config.brope.rescale)
-        elif config.alibi is not None and self.bias_mask is None:
-            self.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head)
+        shared = self.shared
+        if config.rope is not None and shared.angles.size(0) == 0:
+            shared.angles = generate_rotary_embedding(config.ctx_len, config.head_size_a, config.rope.base * config.rope.rebase, config.rope.rescale).to(idx.device)
+        elif config.brope is not None and shared.angles.size(0) == 0:
+            shared.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size_a, config.brope.rescale).to(idx.device)
+        elif config.alibi is not None and self.bias_mask.size(0) == 0:
+            shared.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head).to(idx.device)
+
+        assert (shared.angles.size(0) == 0 or T <= shared.angles.size(0)) or (shared.bias_mask.size(0) == 0 or T <= shared.bias_mask.size(0))
 
         x = self.emb(idx)
 
@@ -416,7 +417,7 @@ class RWKV(pl.LightningModule):
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
-            x, next_block_state = self.ckpt(block, x, x_original_from_input_cache, k_cache, last_model_state)
+            x, next_block_state = self.ckpt(block, x, x_original_from_input_cache, k_cache, last_model_state, shared)
             if self.is_cache_once and layer_id == get_second_submodel_layer_id(config) - 1:
                 compressed_k_cache_chunk = self.w_kv_cache_a(x)
                 k_tokencat_chunk = torch.cat([x_original_chunk, compressed_k_cache_chunk],dim=-1)

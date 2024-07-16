@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 import math
 
@@ -16,7 +16,7 @@ from .norm import rms_norm
 from configs import Transformer_Config
 
 class GPTAlpha_Tmix_gold(MyModule):
-    def __init__(self, args:Transformer_Config, layer_id, angles, bias_mask):
+    def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
@@ -60,14 +60,11 @@ class GPTAlpha_Tmix_gold(MyModule):
 
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
 
-        self.angles = angles
-        self.bias_mask = bias_mask
-
     def shift_cat(self, x):
         return torch.cat([x[:, :1], x[:, :-1]], dim=1)
     
     @MyFunction
-    def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -108,9 +105,7 @@ class GPTAlpha_Tmix_gold(MyModule):
         k = k.view(B,-1,H,K).transpose(1,2)
         v = v.view(B,-1,H,V).transpose(1,2)
 
-        if self.angles is not None:
-            self.angles = self.angles.to(x.device)
-            q, k = apply_rotary_embedding(q, k, self.angles)
+        q, k = apply_rotary_embedding(q, k, shared.angles)
 
         # causality MUST be enforced for longer runs because even though we won't use the results at t-1 the next chanmix WILL for its tokenshift!
         # this is also why we must allow through the last MANY time-steps if we have that many, so chanmix receives both of these and can lerp between those results!

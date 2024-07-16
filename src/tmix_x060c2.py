@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 from configs import FinchC2_Config
 
@@ -29,13 +29,6 @@ class RWKV_Tmix_x060c2(MyModule):
                 ddd[0, 0, i] = i / args.n_embd
 
             self.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
-            # self.time_maa_all = nn.Parameter(torch.cat([
-            #     1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0), # r
-            #     1.0 - torch.pow(ddd, ratio_1_to_almost0), # k
-            #     1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v
-            #     1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1), # v2
-            #     1.0 - torch.pow(ddd, ratio_1_to_almost0), # w
-            # ]))
             self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
             self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
@@ -70,7 +63,7 @@ class RWKV_Tmix_x060c2(MyModule):
         self.ln_x = nn.LayerNorm(args.dim_att)
 
     @MyFunction
-    def forward(self, x, xo, kv_cache, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
 
@@ -81,7 +74,6 @@ class RWKV_Tmix_x060c2(MyModule):
         xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, self.time_maa_w2.size(0), -1).transpose(0, 1)
         xxx = torch.bmm(xxx, self.time_maa_w2).view(self.time_maa_w2.size(0), B, T, C)
 
-        # xr, xk, xv, xv2, xw = (x + dxprev * (self.time_maa_all.view(5, 1, 1, C) + xxx)).unbind(dim=0)
         mr, mk, mv, mw, mv2 = xxx.unbind(dim=0)
         xr = x + dxprev * (self.time_maa_r + mr)
         xk = x + dxprev * (self.time_maa_k + mk)
@@ -110,8 +102,10 @@ class RWKV_Tmix_x060c2(MyModule):
         if self.use_v2:
             y = y + v2
 
-        y = self.ln_x(y)
-        #y = F.layer_norm(y.float(), self.ln_x.normalized_shape, self.ln_x.weight.float(), self.ln_x.bias.float()).to(y.dtype)
+        if self.training:
+            y = self.ln_x(y)
+        else:
+            y = F.layer_norm(y.float(), self.ln_x.normalized_shape, self.ln_x.weight.float(), self.ln_x.bias.float()).to(y.dtype)
 
         y = self.output(y)
         return y, TimeMixState(wkv_state, shift_state)

@@ -89,10 +89,10 @@ if 'x060' in os.environ["RWKV_MODEL_TYPE"]:
 
     @TCompileDisable 
     @torch.jit.ignore
-    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u, s):
+    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u, s) -> Tensor:
         return WKV_6.apply(B, T, C, H, r, k, v, w, u, s)
 else:
     @TCompileDisable 
     @torch.jit.ignore
-    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u, s):
+    def RUN_CUDA_RWKV6(B:int, T:int, C:int, H:int, r, k, v, w, u, s) -> Tensor:
         return None    
