@@ -72,18 +72,9 @@ os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
 os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
 
 
-# if len(sys.argv) < 4:
-#     print('usage:\n\tdragon_test.py MODEL_PATH MODEL_TYPE recurrent|nonrecurrent [seed]')
-#     exit()
-
-
 # Setup the model
 import lightning as pl
-#trainer = pl.Trainer(precision=32)
 from src.model import Transformer
-#with trainer.init_module(empty_init=True):
-#    model = Transformer(config)
-
 
 MODEL_PATH = config.path
 model_path = MODEL_PATH

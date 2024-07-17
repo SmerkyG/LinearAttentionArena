@@ -101,9 +101,9 @@ class PIPELINE():
             with torch.no_grad():
                 while len(tokens) > 0:
                     if recurrent:
-                        out, state = self.model.forward(torch.tensor(tokens[:args.chunk_len], dtype=torch.long, device=self.model.device, requires_grad=False).unsqueeze(0), state)
+                        out, state = self.model.forward(tokens[:args.chunk_len], state)
                     else:
-                        out, state = self.model.forward(torch.tensor(all_tokens, dtype=torch.long, device=self.model.device, requires_grad=False).unsqueeze(0))
+                        out, state = self.model.forward(all_tokens)
                     out = out[0,-1,:]
                     tokens = tokens[args.chunk_len:]
                 

@@ -188,9 +188,14 @@ class Transformer(nn.Module):
             x, next_block_state = block(*block_args)
         return x, next_block_state
 
-    def forward(self, idx, last_model_state:ModelState|None = None):
+    def forward(self, idx:Tensor|list, last_model_state:ModelState|None = None):
         config : Transformer_Config = self.config.model
-        B, T = idx.size()
+        if isinstance(idx, Tensor):
+            B, T = idx.size()
+        else:
+            B = 1
+            T = len(idx)
+            idx = torch.tensor(idx, device=self.emb.weight.device, dtype=torch.long, requires_grad=False)[None, :]
 
         shared = self.shared
         if config.rope is not None and shared.angles.size(0) == 0:
