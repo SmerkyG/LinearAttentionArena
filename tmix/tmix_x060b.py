@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 from src.cuda6 import RUN_CUDA_RWKV6
 from configs import Transformer_Config
-from src.tmix import TimeMixState, Shared
+from src.state import TimeMixState, Shared
 from .tmix_rwkv_base import get_default_state
 
 class TMix_x060b(nn.Module):

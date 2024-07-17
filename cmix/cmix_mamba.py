@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import mamba_ssm
 
-from src.cmix import ChannelMixState
+from src.state import ChannelMixState
 
 class CMix_Mamba(mamba_ssm.Mamba):
     def __init__(self, args, layer_id):

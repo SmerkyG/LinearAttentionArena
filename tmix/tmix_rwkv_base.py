@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 
-from src.tmix import TimeMixState
+from src.state import TimeMixState
 from configs import Transformer_Config
 
 def get_default_state(x:Tensor, config:Transformer_Config, requires_grad:bool):

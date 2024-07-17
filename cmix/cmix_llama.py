@@ -3,7 +3,7 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from typing import Tuple
 
-from src.cmix import ChannelMixState
+from src.state import ChannelMixState
 
 class CMix_Llama(nn.Module):
     def __init__(self, args, layer_id):

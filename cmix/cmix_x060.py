@@ -1,7 +1,7 @@
 import torch
 from torch import nn, Tensor
 
-from src.cmix import ChannelMixState
+from src.state import ChannelMixState
 from .cmix_rwkv_base import get_default_state
 
 class CMix_x060(nn.Module):

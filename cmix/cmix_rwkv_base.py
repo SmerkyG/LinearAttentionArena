@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor, nn
 
-from src.cmix import ChannelMixState
+from src.state import ChannelMixState
 from configs import Transformer_Config
 
 def get_default_state(x:Tensor, config:Transformer_Config, requires_grad:bool):

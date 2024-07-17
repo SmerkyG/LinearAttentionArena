@@ -3,7 +3,7 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from typing import Tuple
 
-from src.tmix import TimeMixState, Shared
+from src.state import TimeMixState, Shared
 
 from src.rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 

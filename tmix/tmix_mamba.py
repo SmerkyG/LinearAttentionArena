@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import mamba_ssm
 
-from src.tmix import TimeMixState, Shared
+from src.state import TimeMixState, Shared
 
 class TMix_Mamba(mamba_ssm.Mamba):
     def __init__(self, args, layer_id):

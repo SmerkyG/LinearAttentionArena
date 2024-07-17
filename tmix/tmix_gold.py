@@ -3,7 +3,7 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from src.cuda6 import RUN_CUDA_RWKV6
 
-from src.tmix import TimeMixState, Shared
+from src.state import TimeMixState, Shared
 
 import math
 

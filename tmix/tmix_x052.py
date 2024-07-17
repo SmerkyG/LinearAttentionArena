@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 from src.cuda5 import RUN_CUDA_RWKV5
-from src.tmix import TimeMixState, Shared
+from src.state import TimeMixState, Shared
 
 from configs import Transformer_Config
 from .tmix_rwkv_base import get_default_state

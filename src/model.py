@@ -13,15 +13,11 @@ import lightning.pytorch as pl
 from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
 from lightning.pytorch.strategies import DeepSpeedStrategy
 
-from .tmix import TimeMixState, ModelState, Shared
-from .cmix import ChannelMixState
+from .state import ModelState, BlockState, ChannelMixState, TimeMixState, Shared
 
 import src
 
 from configs import TrainerCLI_Config, Model_Config, Transformer_Config, Train_Config
-
-import src.cmix_x052
-import src.cmix_x060
 
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
@@ -45,11 +41,6 @@ except:
 # The RWKV Model with our blocks
 ########################################################################################################
 
-class BlockState:
-    def __init__(self, time_mix_state: TimeMixState, channel_mix_state: ChannelMixState):
-        self.time_mix_state = time_mix_state
-        self.channel_mix_state = channel_mix_state
-
 def get_second_submodel_layer_id(model_config:Model_Config):
     return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
 
@@ -58,8 +49,9 @@ from pydoc import locate
 class Block(nn.Module):
     def __init__(self, config:Model_Config, layer_id):
         super().__init__()
-        self.config = config
         self.layer_id = layer_id
+
+        self.parallel = config.parallel
 
         self.ln1 = nn.LayerNorm(config.n_embd)
         self.ln2 = nn.LayerNorm(config.n_embd)
@@ -92,11 +84,11 @@ class Block(nn.Module):
        
         self.is_cache_once = config.tmix2 == 'gold'
 
-        self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
-        self.att = TJIT(tmix)
+        #self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
+        self.att = tmix
         
-        self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
-        self.ffn = TJIT(cmix)
+        #self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        self.ffn = cmix
 
         if config.dropout > 0:
             self.drop0 = nn.Dropout(p = config.dropout)
@@ -105,12 +97,13 @@ class Block(nn.Module):
             self.drop0 = nn.Identity()
             self.drop1 = nn.Identity()
 
+    @TCompile
     def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
-        last_block_state = last_model_state.block_states[self.layer_id]
+        last_block_state:BlockState = last_model_state.block_states[self.layer_id]
 
         # if len(kv_cache.shape) > 0:
         #     att_x = (att_x, kv_cache)
-        if not self.config.parallel:
+        if not self.parallel:
             if self.att is not None:
                 dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
                 x = self.drop0(x + dx)
@@ -123,7 +116,7 @@ class Block(nn.Module):
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
-            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, last_block_state.time_mix_state, shared)
+            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
             dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
             x = self.drop0(x + dx_att + dx_ffn)
 
@@ -164,7 +157,13 @@ class Transformer(nn.Module):
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
-        self.blocks = nn.ModuleList([Block(config.model, i) for i in range(args.n_layer)])
+        blocks = [Block(config.model, i) for i in range(args.n_layer)]
+        self.default_time_mix_state_factories = []
+        self.default_channel_mix_state_factories = []
+        for block in blocks:
+            self.default_time_mix_state_factories.append(block.att.get_default_state_factory() if hasattr(block.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
+            self.default_channel_mix_state_factories.append(block.ffn.get_default_state_factory() if hasattr(block.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState())        
+        self.blocks = nn.ModuleList([TJIT(block) for block in blocks])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
@@ -189,7 +188,6 @@ class Transformer(nn.Module):
             x, next_block_state = block(*block_args)
         return x, next_block_state
 
-    @TCompile
     def forward(self, idx, last_model_state:ModelState|None = None):
         config : Transformer_Config = self.config.model
         B, T = idx.size()
@@ -208,16 +206,15 @@ class Transformer(nn.Module):
 
         total_n_layer = config.n_layer
 
-        # might need to be true for BPTT support
+        # might need to be true in the future for BPTT support
         requires_grad = self.training
         if last_model_state is None:
-            #dtype = x.dtype
             last_model_state = ModelState()
             for layer_id in range(total_n_layer):
                 block = self.blocks[layer_id]
                 last_model_state.block_states.append(BlockState(
-                    block.default_time_mix_state_factory(x, config, requires_grad),
-                    block.default_channel_mix_state_factory(x, config, requires_grad),
+                    self.default_time_mix_state_factories[layer_id](x, config, requires_grad),
+                    self.default_channel_mix_state_factories[layer_id](x, config, requires_grad),
                 ))
             if self.is_cache_once:
                 last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
