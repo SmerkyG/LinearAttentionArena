@@ -110,7 +110,7 @@ model.eval()
 #    torch.set_autocast_gpu_dtype(dtype)
 
 
-from utils import PIPELINE, PIPELINE_ARGS
+from src.pipeline import PIPELINE, PIPELINE_ARGS
 
 # download models: https://huggingface.co/BlinkDL
 pipeline = PIPELINE(model, "rwkv_vocab_v20230424") # for rwkv "world" models

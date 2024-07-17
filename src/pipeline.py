@@ -28,7 +28,7 @@ class PIPELINE():
         elif WORD_NAME == 'rwkv_vocab_v20230424':
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             from src.dataflow.trie_tokenizer import TRIE_TOKENIZER
-            self.tokenizer = TRIE_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/src/dataflow/rwkv_vocab_v20230424.txt')        
+            self.tokenizer = TRIE_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/dataflow/rwkv_vocab_v20230424.txt')        
         else:
             from tokenizers import Tokenizer
             self.tokenizer = Tokenizer.from_file(WORD_NAME)

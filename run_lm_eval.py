@@ -21,7 +21,7 @@ from configs import parse_cmdline_configs, TrainerCLI_Config, Model_Config, Runt
 os.environ["RWKV_JIT_ON"] = '1'
 os.environ["RWKV_CUDA_ON"] = '1'
 
-from utils import PIPELINE, PIPELINE_ARGS
+from src.pipeline import PIPELINE, PIPELINE_ARGS
 
 from lm_eval import tasks, evaluator
 from lm_eval.api.model import TemplateLM
