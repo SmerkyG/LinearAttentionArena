@@ -26,14 +26,14 @@ class TMix_llama(nn.Module):
         self.wv = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.wo = nn.Linear(args.dim_att, args.n_embd, bias=False)
 
-    def forward(self, x, xo, kv_cache, last_timemix_state:TimeMixState, shared:Shared):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, L, D = x.size()
         H = self.n_head
 
         q = self.wq(x) 
         k = self.wk(x)
         v = self.wv(x)
-        wkv_state = last_timemix_state.wkv_state
+        wkv_state = last_state.wkv_state
 
         # handle recurrent inference via maintaining a kv cache
         if not self.training:
@@ -51,4 +51,4 @@ class TMix_llama(nn.Module):
         y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
         y = y.transpose(1,2).reshape(B,L,D)
         y = self.wo(y)
-        return y, TimeMixState(wkv_state, last_timemix_state.shift_state)
+        return y, TimeMixState(wkv_state, last_state.shift_state)

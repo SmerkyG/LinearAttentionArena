@@ -1,4 +1,4 @@
 model:
-    __type__: configs.FinchB2_Config
+    __type__: configs.FinchC2_Config
     tmix: x060c2
     use_one_minus_w: 0
