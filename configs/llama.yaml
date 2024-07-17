@@ -1,6 +1,7 @@
 model:
     __type__: configs.Transformer_Config
-    model_type: llama
+    tmix: llama
+    cmix: llama
     rope:
         __type__: configs.RoPE_Config
         base: 10000

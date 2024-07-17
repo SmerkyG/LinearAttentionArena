@@ -4,10 +4,13 @@ import torch.nn.functional as F
 from typing import Tuple
 
 from src.state import TimeMixState, Shared
+from .kv_cache import get_default_state
 
 from src.rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 
-class TMix_Llama(nn.Module):
+class TMix_llama(nn.Module):
+    def get_default_state_factory(self): return get_default_state
+
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -31,18 +34,21 @@ class TMix_Llama(nn.Module):
         k = self.wk(x)
         v = self.wv(x)
         wkv_state = last_timemix_state.wkv_state
+
+        # handle recurrent inference via maintaining a kv cache
         if not self.training:
-            new_kv_cache = torch.cat([k, v], dim=-1)
+            new_kv_cache = torch.stack([k, v], dim=0)
             wkv_state = torch.cat([wkv_state, new_kv_cache], dim=-2)
-            k, v = wkv_state.chunk(2, dim=-1)
+            k, v = wkv_state.unbind(0)
             k, v = k.contiguous(), v.contiguous()
-        # if self.layer_id==0:
-        #     print("\nq,k,kv", q.shape, k.shape, wkv_state.shape)
+
+        is_causal = q.size(1)==k.size(1)
+
         q = q.view(B,-1,H,D//H).transpose(1,2)
         k = k.view(B,-1,H,D//H).transpose(1,2)
         v = v.view(B,-1,H,D//H).transpose(1,2)
         q, k = apply_rotary_embedding(q, k, shared.angles)
-        y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=q.size(-2)==k.size(-2))
+        y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
         y = y.transpose(1,2).reshape(B,L,D)
         y = self.wo(y)
         return y, TimeMixState(wkv_state, last_timemix_state.shift_state)

@@ -5,7 +5,7 @@ from typing import Tuple
 
 from src.state import ChannelMixState
 
-class CMix_Llama(nn.Module):
+class CMix_llama(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args

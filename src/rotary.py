@@ -21,16 +21,22 @@ def generate_binary_rotary_embedding(max_seqlen:int, dim:int, scale:float=1):
 def apply_rotary_embedding(q, k, angles, seq_dim:int = -2) -> Tuple[Tensor, Tensor]:
     if angles.size(0) == 0:
         return q, k
-
+    
     q_dtype, k_dtype = q.dtype, k.dtype
     L = q.size(seq_dim)
-    angles = angles[-L:].view(1, 1, L, angles.size(1))
+    q_angles = angles[-L:].view(1, 1, L, angles.size(1))
     if q.ndim == 3:
-        q = torch.view_as_complex(q.float().reshape(q.size(0), q.size(1), -1, 2)) * angles
-        k = torch.view_as_complex(k.float().reshape(k.size(0), k.size(1), -1, 2)) * angles
+        q = torch.view_as_complex(q.float().reshape(q.size(0), q.size(1), -1, 2)) * q_angles
     else:
-        q = torch.view_as_complex(q.float().reshape(q.size(0), q.size(1), q.size(2), -1, 2)) * angles
-        k = torch.view_as_complex(k.float().reshape(k.size(0), k.size(1), k.size(2), -1, 2)) * angles
+        q = torch.view_as_complex(q.float().reshape(q.size(0), q.size(1), q.size(2), -1, 2)) * q_angles
+
+    L = k.size(seq_dim)
+    k_angles = angles[-L:].view(1, 1, L, angles.size(1))
+    if k.ndim == 3:
+        k = torch.view_as_complex(k.float().reshape(k.size(0), k.size(1), -1, 2)) * k_angles
+    else:
+        k = torch.view_as_complex(k.float().reshape(k.size(0), k.size(1), k.size(2), -1, 2)) * k_angles
+
     return torch.view_as_real(q).flatten(3).to(q_dtype), torch.view_as_real(k).flatten(3).to(k_dtype)
 
 class RotaryEmbedding(nn.Module):
