@@ -5,8 +5,11 @@ from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
 from .tmix import TimeMixState, Shared
+from .tmix_rwkv_base import get_default_state
 
-class RWKV_Tmix_x060(MyModule):
+class RWKV_Tmix_x060(nn.Module):   
+    def get_default_state_factory(self): return get_default_state
+
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -55,7 +58,6 @@ class RWKV_Tmix_x060(MyModule):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
 
-    @MyFunction
     def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
@@ -83,7 +85,7 @@ class RWKV_Tmix_x060(MyModule):
         u = self.time_faaaa
 
         wkv_state = last_state.wkv_state.clone()
-        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
+        x = RUN_CUDA_RWKV6(r, k, v, w, u, wkv_state)
         x = x.view(B * T, C)
 
         if self.training:

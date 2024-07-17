@@ -33,13 +33,6 @@ void backward_fp16(int64_t B, int64_t T, int64_t C, int64_t H, torch::Tensor &r,
 void backward_fp32(int64_t B, int64_t T, int64_t C, int64_t H, torch::Tensor &r, torch::Tensor &k, torch::Tensor &v, torch::Tensor &w, torch::Tensor &u, torch::Tensor &gy, torch::Tensor &gr, torch::Tensor &gk, torch::Tensor &gv, torch::Tensor &gw, torch::Tensor &gu) {
     cuda_backward_fp32(B, T, C, H, r.data_ptr<fp32>(), k.data_ptr<fp32>(), v.data_ptr<fp32>(), w.data_ptr<fp32>(), u.data_ptr<fp32>(), gy.data_ptr<fp32>(), gr.data_ptr<fp32>(), gk.data_ptr<fp32>(), gv.data_ptr<fp32>(), gw.data_ptr<fp32>(), gu.data_ptr<fp32>());
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("forward_bf16", &forward_bf16, "rwkv6 forward_bf16");
-    m.def("forward_fp16", &forward_fp16, "rwkv6 forward_fp16");
-    m.def("forward_fp32", &forward_fp32, "rwkv6 forward_fp32");
-    m.def("backward_bf16", &backward_bf16, "wkv6 backward bf16");
-    m.def("backward_fp16", &backward_fp16, "wkv6 backward fp16");
-    m.def("backward_fp32", &backward_fp32, "wkv6 backward fp32");}
 
 TORCH_LIBRARY(wkv6b, m) {
     m.def("forward_bf16", forward_bf16);

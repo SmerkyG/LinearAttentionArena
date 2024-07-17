@@ -9,6 +9,7 @@ MyModule = nn.Module
 MyFunction = __nop
 TCompile = __nop
 TCompileDisable = __nop
+TJIT = __nop
 
 if os.getenv("RWKV_TORCH_COMPILE", '0').lower() in ['1', 'true']:
     TCompile = torch.compile
@@ -16,3 +17,4 @@ if os.getenv("RWKV_TORCH_COMPILE", '0').lower() in ['1', 'true']:
 elif os.getenv("RWKV_JIT_ON", '1').lower() in ['1', 'true']:
     MyModule = torch.jit.ScriptModule
     MyFunction = torch.jit.script_method
+    TJIT = torch.jit.script

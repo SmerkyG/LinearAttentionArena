@@ -5,8 +5,11 @@ from .cuda5 import RUN_CUDA_RWKV5
 from .tmix import TimeMixState, Shared
 
 from configs import Transformer_Config
+from .tmix_rwkv_base import get_default_state
 
 class RWKV_Tmix_x052(MyModule):
+    def get_default_state_factory(self): return get_default_state
+
     def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
         self.args = args
@@ -80,5 +83,5 @@ class RWKV_Tmix_x052(MyModule):
         B, T, C = x.size()
         H = self.n_head
         r, k, v, g = self.jit_func(x)        
-        x = RUN_CUDA_RWKV5(B, T, C, H, r, k, v, w=self.time_decay, u=self.time_faaaa)
+        x = RUN_CUDA_RWKV5(r, k, v, w=self.time_decay, u=self.time_faaaa)
         return self.jit_func_2(x, g)

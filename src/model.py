@@ -84,65 +84,67 @@ class Block(nn.Module):
 
         ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(config, layer_id)
 
-        mt = os.environ["RWKV_MODEL_TYPE"]
+        mt = config.model_type
         if 'parallel' in mt:
             self.parallel = True
 
-        if mt.startswith('x060bbswa'):
-            attFactory = lambda: RWKV_Tmix_x060bbswa(config, layer_id)
-        elif mt.startswith('x060b5'):
-            attFactory = lambda: src.tmix_x060b5.RWKV_Tmix_x060b5(config, layer_id)
-        elif mt.startswith('x060c2'):
-            attFactory = lambda: src.tmix_x060c2.RWKV_Tmix_x060c2(config, layer_id)
-        elif mt.startswith('x060b'):
-            attFactory = lambda: src.tmix_x060b.RWKV_Tmix_x060b(config, layer_id)
-        elif mt.startswith('x060o3'):
-            attFactory = lambda: src.tmix_x060o3.RWKV_Tmix_x060o3(config, layer_id)
-        elif mt.startswith('x052'):
-            attFactory = lambda: src.tmix_x052.RWKV_Tmix_x052(config, layer_id)
-            ffnFactory = lambda: src.cmix_x052.RWKV_CMix_x052(config, layer_id)
-        elif mt.startswith('x060'):
-            attFactory = lambda: src.tmix_x060.RWKV_Tmix_x060(config, layer_id)
-        elif mt.startswith('gptalpha'):
-            attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(config, layer_id)
-        elif mt.startswith('llama'):
-            attFactory = lambda: src.tmix_llama.Llama_Tmix(config, layer_id)
-            ffnFactory = lambda: src.tmix_llama.Llama_CMix(config, layer_id)
-        elif mt.startswith('mamba'):
-            attFactory = lambda: src.tmix_mamba.Mamba(config, layer_id)
-            ffnFactory = lambda: src.tmix_mamba.MambaFFN(config, layer_id)
-        else:
-            print(f"Unsupported model type: {mt}")
-            exit(0)
+        model_subtypes = mt.split('_')
+        match model_subtypes[0]:
+            case 'x060bbswa':
+                attFactory = lambda: RWKV_Tmix_x060bbswa(config, layer_id)
+            case 'x060c2':
+                attFactory = lambda: src.tmix_x060c2.RWKV_Tmix_x060c2(config, layer_id)
+            case 'x060b':
+                attFactory = lambda: src.tmix_x060b.RWKV_Tmix_x060b(config, layer_id)
+            case 'x052':
+                attFactory = lambda: src.tmix_x052.RWKV_Tmix_x052(config, layer_id)
+                ffnFactory = lambda: src.cmix_x052.RWKV_CMix_x052(config, layer_id)
+            case 'x060':
+                attFactory = lambda: src.tmix_x060.RWKV_Tmix_x060(config, layer_id)
+            case 'gptalpha':
+                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(config, layer_id)
+            case 'llama':
+                attFactory = lambda: src.tmix_llama.Llama_Tmix(config, layer_id)
+                ffnFactory = lambda: src.tmix_llama.Llama_CMix(config, layer_id)
+            case 'mamba':
+                attFactory = lambda: src.tmix_mamba.Mamba(config, layer_id)
+                ffnFactory = lambda: src.tmix_mamba.MambaFFN(config, layer_id)
+            case _:
+                print(f"Unsupported model type: {mt}")
+                exit(0)
         
-        if '_taylor' in mt:
+        if len(model_subtypes) > 1 and 'taylor' in model_subtypes:
             if layer_id >= get_second_submodel_layer_id(config): #config.n_layer * 2 // 3 - 1 and layer_id < config.n_layer - 1:
                 if 'taylorchunked' in mt:
                     attFactory = lambda: src.tmix_taylorchunked.RWKV_Tmix_taylorchunked(config, layer_id)
                 else:
                     attFactory = lambda: src.tmix_taylor.RWKV_Tmix_taylor(config, layer_id)
 
-        if '_gptalpha' in mt:
+        if len(model_subtypes) > 1 and model_subtypes[1] == 'gptalpha':
             if layer_id >= get_second_submodel_layer_id(config):
                 attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(config, layer_id)
 
-        self.is_cache_once = '_gold' in mt
+        self.is_cache_once = len(model_subtypes) > 1 and model_subtypes[1] == 'gold'
         if self.is_cache_once:
             if layer_id >= get_second_submodel_layer_id(config) and layer_id < config.n_layer:
-                if '_goldbha' in mt:
+                if model_subtypes[1] == 'goldbha':
                     attFactory = lambda: src.tmix_goldbha.GPTAlpha_Tmix_goldbha(config, layer_id)
                 else:
                     attFactory = lambda: src.tmix_gold.GPTAlpha_Tmix_gold(config, layer_id)
-                if mt.startswith('mamba'):
+                if model_subtypes[0] == 'mamba':
                     ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(config, layer_id)
 
         self.att = attFactory()
+        self.default_time_mix_state_factory = self.att.get_default_state_factory() if hasattr(self.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
+        self.att = TJIT(self.att)
         
         if ffnFactory is None:
             self.ln2 = None
             self.ffn = None
         else:
             self.ffn = ffnFactory()
+        self.default_channel_mix_state_factory = self.ffn.get_default_state_factory() if hasattr(self.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        self.ffn = TJIT(self.ffn)
 
 
         if config.dropout > 0:
@@ -209,7 +211,7 @@ class Transformer(nn.Module):
         assert args.dim_att % 32 == 0
         assert args.dim_ffn % 32 == 0
 
-        mt = os.environ["RWKV_MODEL_TYPE"]
+        mt = config.model.model_type
         self.is_cache_once = '_gold' in mt
         self.is_llama = mt.startswith('llama')
 
@@ -259,49 +261,37 @@ class Transformer(nn.Module):
 
         x = self.emb(idx)
 
-        dtype = x.dtype#torch.get_autocast_gpu_dtype()
-
         total_n_layer = config.n_layer
 
-        # FIXME - might need to be true later for BPTT
+        # might need to be true for BPTT support
         requires_grad = self.training
         if last_model_state is None:
             #dtype = x.dtype
             last_model_state = ModelState()
-
-            wkv_state_shape = [B, config.dim_att//config.head_size, config.head_size, config.head_size]
-            if self.is_llama:
-                wkv_state_shape = [B, 0, config.dim_att * 2]
-            last_model_state.block_states = [
-                BlockState(
-                    TimeMixState(
-                        torch.zeros(wkv_state_shape, dtype=dtype, device=idx.device, requires_grad=requires_grad), 
-                        torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)
-                    ), 
-                    ChannelMixState(
-                        torch.zeros([B, x.size(-1)], dtype=dtype, device=idx.device, requires_grad=requires_grad)
-                    )
-                ) 
-                for layer_id in range(total_n_layer)
-            ]
-            last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
+            for layer_id in range(total_n_layer):
+                block = self.blocks[layer_id]
+                last_model_state.block_states.append(BlockState(
+                    block.default_time_mix_state_factory(x, config, requires_grad),
+                    block.default_channel_mix_state_factory(x, config, requires_grad),
+                ))
             if self.is_cache_once:
-                # FIXME - need max ctx len not just training ctx_len?
-                k_cache_len = 0# if self.training else config.ctx_len
-                last_model_state.k_cache = torch.zeros([B, k_cache_len, config.dim_att], dtype=dtype, device=idx.device, requires_grad=requires_grad)
+                last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
+                last_model_state.k_cache = torch.zeros([B, 0, config.dim_att], dtype=x.dtype, device=x.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
         x = self.blocks[0].ln0(x)
         x_original_chunk = x
         
-        x_original_from_input_cache = torch.cat( [
-            self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
-            x
-        ], dim=-2)
-        
         k_cache = last_model_state.k_cache
         next_model_state = ModelState()
-        next_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, idx], dim=-1)
+        if self.is_cache_once:
+            x_original_from_input_cache = torch.cat( [
+                self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
+                x
+            ], dim=-2)
+            next_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, idx], dim=-1)
+        else:
+            x_original_from_input_cache = torch.tensor([])
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
@@ -427,7 +417,7 @@ class Transformer(nn.Module):
                     scale = 0.5
                 nn.init.orthogonal_(m[n], gain=scale)
                 print(f" [scale {scale}]")
-            elif 'mamba' in os.environ["RWKV_MODEL_TYPE"] and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_second_submodel_layer_id(self.config.model))):
+            elif 'mamba' in self.config.model.model_type and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_second_submodel_layer_id(self.config.model))):
                 m[n] = p
                 if '.out_proj.weight' in n:
                     scale = 0

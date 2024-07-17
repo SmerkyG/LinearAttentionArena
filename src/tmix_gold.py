@@ -15,7 +15,11 @@ from .norm import rms_norm
 
 from configs import Transformer_Config
 
-class GPTAlpha_Tmix_gold(MyModule):
+from .tmix_rwkv_base import get_default_state
+
+class GPTAlpha_Tmix_gold(nn.Module):
+    def get_default_state_factory(self): return get_default_state
+
     def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
         self.args = args
@@ -63,7 +67,6 @@ class GPTAlpha_Tmix_gold(MyModule):
     def shift_cat(self, x):
         return torch.cat([x[:, :1], x[:, :-1]], dim=1)
     
-    @MyFunction
     def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head

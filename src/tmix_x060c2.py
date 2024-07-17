@@ -8,7 +8,11 @@ from .tmix import TimeMixState, Shared
 
 from configs import FinchC2_Config
 
-class RWKV_Tmix_x060c2(MyModule):
+from .tmix_rwkv_base import get_default_state
+
+class RWKV_Tmix_x060c2(nn.Module):
+    def get_default_state_factory(self): return get_default_state
+    
     def __init__(self, args:FinchC2_Config, layer_id):
         super().__init__()
         self.args = args
@@ -62,7 +66,6 @@ class RWKV_Tmix_x060c2(MyModule):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    @MyFunction
     def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
@@ -97,7 +100,7 @@ class RWKV_Tmix_x060c2(MyModule):
             u = self.time_faaaa
 
         wkv_state = last_state.wkv_state.clone()
-        y = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
+        y = RUN_CUDA_RWKV6(r, k, v, w, u, wkv_state)
 
         if self.use_v2:
             y = y + v2

@@ -3,8 +3,11 @@ from torch import nn, Tensor
 from .CoreDependencies import *
 
 from .cmix import ChannelMixState
+from .cmix_rwkv_base import get_default_state
 
-class RWKV_CMix_x060(MyModule):
+class RWKV_CMix_x060(nn.Module):
+    def get_default_state_factory(self): return get_default_state
+
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -23,7 +26,6 @@ class RWKV_CMix_x060(MyModule):
         self.receptance = nn.Linear(args.n_embd, args.n_embd, bias=False)
         self.value = nn.Linear(args.dim_ffn, args.n_embd, bias=False)
 
-    @MyFunction
     def forward(self, x, last_state:ChannelMixState):
         shift_state = x[:, -1].clone()
         dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
