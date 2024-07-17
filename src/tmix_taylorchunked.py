@@ -4,9 +4,9 @@ from .CoreDependencies import *
 
 import math
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
-class RWKV_Tmix_taylorchunked(MyModule):
+class RWKV_Tmix_taylorchunked(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -46,8 +46,7 @@ class RWKV_Tmix_taylorchunked(MyModule):
         self.ln_q = nn.LayerNorm(self.head_size)
         self.ln_k = nn.LayerNorm(self.head_size)
 
-    @MyFunction
-    def forward(self, x, x_original, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         Q = C // H

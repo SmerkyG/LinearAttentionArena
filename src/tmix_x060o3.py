@@ -3,12 +3,12 @@ from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
 
-class RWKV_Tmix_x060o3(MyModule):
+class RWKV_Tmix_x060o3(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -52,8 +52,7 @@ class RWKV_Tmix_x060o3(MyModule):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    @MyFunction
-    def forward(self, x, xo, kv_cache, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -85,7 +84,7 @@ class RWKV_Tmix_x060o3(MyModule):
         u = self.time_faaaa
 
         wkv_state = last_state.wkv_state.clone()
-        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u, wkv_state)
+        x = RUN_CUDA_RWKV6(r, k, v, w, u, wkv_state)
 
         #x, s = fused_recurrent_rwkv6hypno2(r, k, v, w, u, z, initial_state=torch.zeros([0], dtype=r.dtype, device=r.device), scale=-1, output_final_state=False, causal=True)
         #x = x.transpose(1,2).reshape(B,T,C)

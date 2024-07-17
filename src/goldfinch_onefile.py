@@ -306,14 +306,14 @@ class GoCOAttention(nn.Module):
 
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
 
-    def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, xo, k_cache, last_state:TimeMixState):
         B, T, C = x.size()
         N = self.n_head
         K = C // N
         V = C // N
 
         shift_state = x[:, -1].clone()
-        dxprev = torch.concat((last_time_mix_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
         mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
@@ -355,7 +355,7 @@ class GoCOAttention(nn.Module):
 
         x = self.output(x)
 
-        return x, TimeMixState(wkv_state=last_time_mix_state.wkv_state, shift_state=shift_state)
+        return x, TimeMixState(wkv_state=last_state.wkv_state, shift_state=shift_state)
 
 class FinchChannelMix(nn.Module):
     def __init__(self, config:Config):
@@ -420,14 +420,14 @@ class GPTAlphaTimeMix(nn.Module):
 
         self.angles = angles
 
-    def forward(self, x, xo, kv_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState):
         B, T, C = x.size()
         N = self.n_head
         K = C // N
         V = C // N
 
         shift_state = x[:, -1].clone()
-        dxprev = torch.concat((last_time_mix_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
 
@@ -465,5 +465,5 @@ class GPTAlphaTimeMix(nn.Module):
 
         x = self.output(x)
 
-        return x, TimeMixState(wkv_state=last_time_mix_state.wkv_state, shift_state=shift_state)
+        return x, TimeMixState(wkv_state=last_state.wkv_state, shift_state=shift_state)
 

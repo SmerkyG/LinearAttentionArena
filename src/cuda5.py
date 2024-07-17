@@ -71,10 +71,10 @@ if 'x052' in os.environ["RWKV_MODEL_TYPE"]:
                 return (gr, gk, gv, gw, gu)
 
     @TCompileDisable 
-    def RUN_CUDA_RWKV5(r, k, v, w, u):
+    def RUN_CUDA_RWKV5(r, k, v, w, u) -> Tensor:
         return WKV_5.apply(r, k, v, w, u)
 else:
     @TCompileDisable 
-    def RUN_CUDA_RWKV5(r, k, v, w, u):
+    def RUN_CUDA_RWKV5(r, k, v, w, u) -> Tensor:
         return None
     

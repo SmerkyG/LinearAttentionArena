@@ -5,7 +5,7 @@ from .CoreDependencies import *
 
 from .rwkv_triton_v6hypno2 import fused_recurrent_rwkv6hypno2
 
-class RWKV_Tmix_x060x(MyModule):
+class RWKV_Tmix_x060x(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -63,8 +63,7 @@ class RWKV_Tmix_x060x(MyModule):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    @MyFunction
-    def forward(self, x):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -97,7 +96,7 @@ class RWKV_Tmix_x060x(MyModule):
         u = self.time_first.view(H,K,V).float()
         z = self.time_filter.view(H,K,V).float()
 
-        #x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, torch.zeros(H, K, device=r.device, dtype=r.dtype))
+        #x = RUN_CUDA_RWKV6(r, k, v, w, torch.zeros(H, K, device=r.device, dtype=r.dtype))
         x, s = fused_recurrent_rwkv6hypno2(r, k, v, w, u, z, initial_state=torch.zeros([0], dtype=r.dtype, device=r.device), scale=-1, output_final_state=False, causal=True)
         x = x.transpose(1,2).reshape(B,T,C)
         

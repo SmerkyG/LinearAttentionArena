@@ -3,7 +3,7 @@ from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-class RWKV_Tmix_x060q(MyModule):
+class RWKV_Tmix_x060q(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -51,8 +51,7 @@ class RWKV_Tmix_x060q(MyModule):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    @MyFunction
-    def forward(self, x):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -80,7 +79,7 @@ class RWKV_Tmix_x060q(MyModule):
         w = -nn.functional.elu(-w+tau)+tau
         k = (1 - ( (-w.exp()).exp() )).to(r)
 
-        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, torch.zeros([H,K], dtype=r.dtype, device=r.device))
+        x = RUN_CUDA_RWKV6(r, k, v, w, torch.zeros([H,K], dtype=r.dtype, device=r.device))
 
         x = x + ((self.time_faaaa.view(1,1,H,V) + head_v_mult) * v.view(B,T,H,V)).view(B,T,C)
 

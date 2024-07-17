@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 def causal_bias_mask(T):
     return torch.full((T, T), float('-inf')).triu(1)
@@ -27,7 +27,7 @@ class AlibiMask(nn.Module):
     def forward(self, q:Tensor):
         return self.mask[:, :q.size(-2), :q.size(-2)]
 
-class RWKV_Tmix_x060bbswa(MyModule):
+class RWKV_Tmix_x060bbswa(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -83,8 +83,7 @@ class RWKV_Tmix_x060bbswa(MyModule):
 
         self.bias_mask = AlibiMask(args.ctx_len, self.n_kv_head, layer_id)
 
-    @MyFunction
-    def forward(self, x, x_original, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H

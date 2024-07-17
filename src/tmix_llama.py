@@ -9,7 +9,7 @@ from .cmix import ChannelMixState
 
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 
-class Llama_CMix(MyModule):
+class Llama_CMix(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -20,11 +20,10 @@ class Llama_CMix(MyModule):
         self.w2 = nn.Linear(self.dim_ffn, args.n_embd, bias=False)
         self.w3 = nn.Linear(args.n_embd, self.dim_ffn, bias=False)
 
-    @MyFunction
     def forward(self, x, last_state:ChannelMixState):
         return self.w2(F.silu(self.w1(x)) * self.w3(x)), last_state
 
-class Llama_Tmix(MyModule):
+class Llama_Tmix(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -40,7 +39,6 @@ class Llama_Tmix(MyModule):
         self.wv = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.wo = nn.Linear(args.dim_att, args.n_embd, bias=False)
 
-    @MyFunction
     def forward(self, x, xo, kv_cache, last_timemix_state:TimeMixState, shared:Shared):
         B, L, D = x.size()
         H = self.n_head

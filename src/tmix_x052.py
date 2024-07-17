@@ -1,5 +1,6 @@
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda5 import RUN_CUDA_RWKV5
 from .tmix import TimeMixState, Shared
@@ -7,7 +8,7 @@ from .tmix import TimeMixState, Shared
 from configs import Transformer_Config
 from .tmix_rwkv_base import get_default_state
 
-class RWKV_Tmix_x052(MyModule):
+class RWKV_Tmix_x052(nn.Module):
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args:Transformer_Config, layer_id):
@@ -56,10 +57,12 @@ class RWKV_Tmix_x052(MyModule):
         self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att)
 
-    @MyFunction
     def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
-        xx = self.time_shift(x) # Mix x with the previous timestep to produce xk, xv, xr
+        shift_state = x[:, -1].clone()
+    
+        # Mix x with the previous timestep to produce xk, xv, xr
+        xx = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1)
         xk = x * self.time_mix_k + xx * (1 - self.time_mix_k)
         xv = x * self.time_mix_v + xx * (1 - self.time_mix_v)
         xr = x * self.time_mix_r + xx * (1 - self.time_mix_r)
@@ -69,19 +72,13 @@ class RWKV_Tmix_x052(MyModule):
         k = self.key(xk)
         v = self.value(xv)
         g = F.silu(self.gate(xg))
-        return r, k, v, g
 
-    @MyFunction
-    def jit_func_2(self, x, g):
-        B, T, C = x.size()
+        # FIXME - add support for RWKV-5 state
+        wkv_state = last_state.wkv_state.clone()
+        x = RUN_CUDA_RWKV5(r, k, v, w=self.time_decay, u=self.time_faaaa)
+
         x = x.view(B * T, C)       
         x = self.ln_x(x / self.head_size_divisor).view(B, T, C)
         x = self.output(x * g)
-        return x
-
-    def forward(self, x):
-        B, T, C = x.size()
-        H = self.n_head
-        r, k, v, g = self.jit_func(x)        
-        x = RUN_CUDA_RWKV5(r, k, v, w=self.time_decay, u=self.time_faaaa)
-        return self.jit_func_2(x, g)
+        return x, TimeMixState(wkv_state, shift_state)
+    

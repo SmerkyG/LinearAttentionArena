@@ -3,9 +3,9 @@ from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
-class RWKV_Tmix_x060b5(MyModule):
+class RWKV_Tmix_x060b5(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -72,8 +72,7 @@ class RWKV_Tmix_x060b5(MyModule):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    @MyFunction
-    def forward(self, x_in, x_original, last_state:TimeMixState):
+    def forward(self, x_in, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x_in.size()
 
         #xxx = x + dxprev * self.time_maa_x

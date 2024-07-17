@@ -3,7 +3,7 @@ from torch import nn, Tensor
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 from .tmix_rwkv_base import get_default_state
 
 class RWKV_Tmix_x060b(nn.Module):
@@ -55,7 +55,7 @@ class RWKV_Tmix_x060b(nn.Module):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
 

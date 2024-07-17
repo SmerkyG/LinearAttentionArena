@@ -3,11 +3,11 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from .CoreDependencies import *
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 import math
 
-class RWKV_Tmix_adder(MyModule):
+class RWKV_Tmix_adder(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -61,8 +61,7 @@ class RWKV_Tmix_adder(MyModule):
         self.output = nn.Linear(self.dim_v, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(self.dim_v)
 
-    @MyFunction
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         Q = self.dim_k // H

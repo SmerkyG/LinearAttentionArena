@@ -4,14 +4,14 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 import math
 
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
 
-class GPTAlpha_Tmix(MyModule):
+class GPTAlpha_Tmix(nn.Module):
     def __init__(self, args, layer_id, angles, bias_mask):
         super().__init__()
         self.args = args
@@ -49,15 +49,14 @@ class GPTAlpha_Tmix(MyModule):
         self.angles = angles
         self.bias_mask = bias_mask
 
-    @MyFunction
-    def forward(self, x, xo, kv_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
         V = C // H
 
         shift_state = x[:, -1].clone()
-        dxprev = torch.concat((last_time_mix_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
 
@@ -95,5 +94,5 @@ class GPTAlpha_Tmix(MyModule):
 
         x = self.output(x)
 
-        return x, TimeMixState(last_time_mix_state.wkv_state, shift_state)
+        return x, TimeMixState(last_state.wkv_state, shift_state)
 

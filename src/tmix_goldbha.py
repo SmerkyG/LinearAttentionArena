@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 import math
 
@@ -13,7 +13,7 @@ from typing import Tuple
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
 
-class GPTAlpha_Tmix_goldbha(MyModule):
+class GPTAlpha_Tmix_goldbha(nn.Module):
     def __init__(self, args, layer_id, angles, bias_mask):
         super().__init__()
         self.args = args
@@ -77,8 +77,7 @@ class GPTAlpha_Tmix_goldbha(MyModule):
         assert Ctotal % n_bound == 0
         return (xw1.view(B*T,n_bound,-1).transpose(0,1) @ w2).view(n_bound,B,T,-1)
 
-    @MyFunction
-    def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
 
         B, T, C = x.size()
         H = self.n_head
@@ -86,7 +85,7 @@ class GPTAlpha_Tmix_goldbha(MyModule):
         V = C // H
 
         shift_state = x[:, -1].clone()
-        dxprev = torch.concat((last_time_mix_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
 
@@ -132,5 +131,5 @@ class GPTAlpha_Tmix_goldbha(MyModule):
 
         x = self.output(x)
 
-        return x, TimeMixState(last_time_mix_state.wkv_state, shift_state)
+        return x, TimeMixState(last_state.wkv_state, shift_state)
 

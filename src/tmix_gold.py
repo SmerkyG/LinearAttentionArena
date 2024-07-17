@@ -67,14 +67,14 @@ class GPTAlpha_Tmix_gold(nn.Module):
     def shift_cat(self, x):
         return torch.cat([x[:, :1], x[:, :-1]], dim=1)
     
-    def forward(self, x, xo, k_cache, last_time_mix_state:TimeMixState, shared:Shared):
+    def forward(self, x, xo, k_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
         V = C // H
 
         shift_state = x[:, -1].clone()
-        dxprev = torch.concat((last_time_mix_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
         mq = torch.tanh(xxx @ self.time_maa_q_w1) @ self.time_maa_q_w2
@@ -123,5 +123,5 @@ class GPTAlpha_Tmix_gold(nn.Module):
 
         x = self.output(x)
 
-        return x, TimeMixState(last_time_mix_state.wkv_state, shift_state)
+        return x, TimeMixState(last_state.wkv_state, shift_state)
 

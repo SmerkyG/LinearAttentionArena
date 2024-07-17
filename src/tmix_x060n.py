@@ -7,7 +7,7 @@ from .CoreDependencies import *
 from fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
 #from .rwkv_triton_v6hypno2 import fused_recurrent_rwkv6hypno2
 
-class RWKV_Tmix_x060n(MyModule):
+class RWKV_Tmix_x060n(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -53,8 +53,7 @@ class RWKV_Tmix_x060n(MyModule):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    @MyFunction
-    def forward(self, x):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
@@ -85,7 +84,7 @@ class RWKV_Tmix_x060n(MyModule):
 
         u = self.time_faaaa
 
-        #x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u)
+        #x = RUN_CUDA_RWKV6(r, k, v, w, u)
 
         #x, s = fused_recurrent_rwkv6hypno2(r, k, v, w, u, z, initial_state=torch.zeros([0], dtype=r.dtype, device=r.device), scale=-1, output_final_state=False, causal=True)
         x, s = fused_recurrent_rwkv6(r, k, v, w, u, scale=-1, initial_state=None, output_final_state=False, causal=True)

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-class RWKV_Tmix_x060f(MyModule):
+class RWKV_Tmix_x060f(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -51,8 +51,7 @@ class RWKV_Tmix_x060f(MyModule):
         self.output = nn.Linear(self.dim_v + self.dim_ffn, args.n_embd, bias=False) # D(V+F) params
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    @MyFunction
-    def forward(self, x):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = self.k_head_size
@@ -81,7 +80,7 @@ class RWKV_Tmix_x060f(MyModule):
         # FIXME - GQA
 
         # FIXME - support different rk, v sizing
-        x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u)
+        x = RUN_CUDA_RWKV6(r, k, v, w, u)
 
         x = self.ln_x(x)
         x = torch.cat([x, ffn], dim=-1)

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 import math
 
@@ -65,7 +65,7 @@ def l2_norm(x, eps:float = 1e-8):
     # assumes that vector 'normally' has length 1, not length vec.size(-1)**0.5 (which would be if every component had an average absolute value of 1!)
     return x / (x.norm(2, dim=-1, keepdim=True) + eps)
 
-class RWKV_Tmix_dcattn(MyModule):
+class RWKV_Tmix_dcattn(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -135,8 +135,7 @@ class RWKV_Tmix_dcattn(MyModule):
         y = y + torch.einsum('BNTS,BSN->BNTS', x, kgw)
         return y
         
-    @MyFunction
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, D = x.size()
         N = self.n_head
         K = D // N

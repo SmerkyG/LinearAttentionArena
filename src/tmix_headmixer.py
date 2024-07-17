@@ -4,14 +4,14 @@ import torch.nn.functional as F
 from .CoreDependencies import *
 from .cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState
+from .tmix import TimeMixState, Shared
 
 import math
 
 from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 from .norm import rms_norm
 
-class RWKV_Tmix_headmixer(MyModule):
+class RWKV_Tmix_headmixer(nn.Module):
     def __init__(self, args, layer_id):
         super().__init__()
         self.args = args
@@ -58,8 +58,7 @@ class RWKV_Tmix_headmixer(MyModule):
         assert Ctotal % n_bound == 0
         return (xw1.view(B*T,n_bound,-1).transpose(0,1) @ w2).view(n_bound,B,T,-1)
 
-    @MyFunction
-    def forward(self, x, last_state:TimeMixState):
+    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
         H = self.n_head
         K = C // H
