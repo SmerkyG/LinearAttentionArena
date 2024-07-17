@@ -149,7 +149,7 @@ if __name__ == "__main__":
 
     ########################################################################################################
 
-    from src.trainer import train_callback, generate_init_weight
+    from src.trainer import train_callback
     from src.dataset import MyDataset, MMapDataset
 
     from src.lit import LightningModelWrapper
@@ -179,10 +179,13 @@ if __name__ == "__main__":
         model = Transformer(config)
         wrapper = LightningModelWrapper(model, config)
 
-    if len(config.train.load_model) == 0 or config.train.train_stage == 1:  # should we build the initial weights?
+    if config.train.train_stage == 1:  # should we build the initial weights?
         init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"
-        generate_init_weight(model, config, init_weight_name)  # save initial weights
-        config.train.load_model = init_weight_name
+        mm = model.generate_init_weight()
+        print(f"Save to {init_weight_name}...")
+        torch.save(mm, init_weight_name)
+        print("Done. Now go for stage 2.")
+        exit(0)
 
     rank_zero_info(f"########## Loading {config.train.load_model}... ##########")
     load_dict = torch.load(config.train.load_model, map_location="cpu")
