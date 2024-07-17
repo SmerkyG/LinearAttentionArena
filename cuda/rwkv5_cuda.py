@@ -1,7 +1,7 @@
 import os
 import torch
 from torch import nn, Tensor
-from .CoreDependencies import *
+from src.CoreDependencies import *
 
 ########################################################################################################
 # CUDA Kernel

@@ -1,6 +1,6 @@
 import torch
 from torch import nn, Tensor
-from src.cuda6 import RUN_CUDA_RWKV6
+from cuda.rwkv6_cuda import RUN_CUDA_RWKV6
 from configs import Transformer_Config
 from src.state import TimeMixState, Shared
 from .tmix_rwkv_base import get_default_state

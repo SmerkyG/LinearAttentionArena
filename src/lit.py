@@ -11,7 +11,7 @@ from lightning.pytorch.strategies import DeepSpeedStrategy
 
 from configs import TrainerCLI_Config, Model_Config, Transformer_Config, Train_Config
 
-from .modelstate import ModelState
+from .state import ModelState
 
 import src.metrics as metrics
 
