@@ -81,11 +81,8 @@ if __name__ == "__main__":
             config.train.load_model = f"{config.runtime.proj_path}/rwkv-init.pth"
         else:
             config.train.load_model = f"{config.runtime.proj_path}/rwkv-{max_p}.pth"
-            if config.train.warmup_steps < 0:
-                if config.train.train_stage == 2:
-                    config.train.warmup_steps = 10
-                else:
-                    config.train.warmup_steps = 30
+        if config.train.warmup_steps < 0:
+            config.train.warmup_steps = 10
         config.train.epoch_begin = max_p + 1
 
     samples_per_epoch = runtime_config.epoch_global_steps * runtime_config.global_step_bsz
