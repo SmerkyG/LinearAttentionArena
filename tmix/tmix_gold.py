@@ -1,23 +1,22 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-from .CoreDependencies import *
-from .cuda6 import RUN_CUDA_RWKV6
+from src.cuda6 import RUN_CUDA_RWKV6
 
-from .tmix import TimeMixState, Shared
+from src.tmix import TimeMixState, Shared
 
 import math
 
 from typing import Tuple
 
-from .rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
-from .norm import rms_norm
+from src.rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
+from src.norm import rms_norm
 
 from configs import Transformer_Config
 
 from .tmix_rwkv_base import get_default_state
 
-class GPTAlpha_Tmix_gold(nn.Module):
+class TMix_gold(nn.Module):
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args:Transformer_Config, layer_id):

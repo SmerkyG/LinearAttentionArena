@@ -1,3 +1,3 @@
 model:
     __type__: configs.Transformer_Config
-    model_type: x060
+    tmix: x060

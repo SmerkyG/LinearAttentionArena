@@ -1,14 +1,13 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-from .CoreDependencies import *
-from .cuda5 import RUN_CUDA_RWKV5
-from .tmix import TimeMixState, Shared
+from src.cuda5 import RUN_CUDA_RWKV5
+from src.tmix import TimeMixState, Shared
 
 from configs import Transformer_Config
 from .tmix_rwkv_base import get_default_state
 
-class RWKV_Tmix_x052(nn.Module):
+class TMix_x052(nn.Module):
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args:Transformer_Config, layer_id):

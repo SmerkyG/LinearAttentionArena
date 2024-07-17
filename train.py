@@ -36,13 +36,25 @@ if __name__ == "__main__":
     config.runtime = runtime_config
     runtime_config.my_timestamp = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
     runtime_config.global_step_bsz = int(config.train.num_nodes) * int(config.train.devices) * config.train.micro_bsz * config.train.accumulate_grad_batches
-    os.environ["RWKV_MODEL_TYPE"] = config.model.model_type
+    os.environ["RWKV_MODEL_TYPE"] = config.model.tmix
     os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
 
-    runtime_config.run_name = f"{config.model.model_type} L{config.model.n_layer} D{config.model.n_embd} ctx{config.model.ctx_len} "
-    if not os.path.exists(config.train.proj_dir):
-        os.makedirs(config.train.proj_dir)
+    model_name = f'{config.model.tmix}'
+    if config.model.tmix2 != '':
+        model_name += f'_{config.model.tmix2}'
+    runtime_config.run_name = f"{model_name} L{config.model.n_layer} D{config.model.n_embd} ctx{config.model.ctx_len} "
+    
+    if config.train.proj_name == '':
+        config.train.proj_name = f'L{config.model.n_layer}-D{config.model.n_embd}-{config.model.tmix}'
+        if config.model.tmix2 != '':
+            config.train.proj_name += f'_{config.model.tmix2}'
+    config.runtime.proj_path = config.train.proj_dir + '/'
+    config.runtime.proj_path += config.train.proj_name    
+    if config.train.proj_suffix != '':
+        config.runtime.proj_path += f'-{config.train.proj_suffix}'
+    if not os.path.exists(config.runtime.proj_path):
+        os.makedirs(config.runtime.proj_path)
 
     assert config.train.train_stage > 0
 
@@ -52,7 +64,7 @@ if __name__ == "__main__":
     assert runtime_config.epoch_global_steps * runtime_config.global_step_bsz == 40320
     if config.train.train_stage >= 2:  # find latest saved model
         list_p = []
-        for p in os.listdir(config.train.proj_dir):
+        for p in os.listdir(config.runtime.proj_path):
             if p.startswith("rwkv") and p.endswith(".pth"):
                 p = ((p.split("-"))[1].split("."))[0]
                 if p != "final":
@@ -66,9 +78,9 @@ if __name__ == "__main__":
         if len(list_p) > 1:
             runtime_config.my_pile_prev_p = list_p[-2]  # in case max_p is corrupted
         if max_p == -1:
-            config.train.load_model = f"{config.train.proj_dir}/rwkv-init.pth"
+            config.train.load_model = f"{config.runtime.proj_path}/rwkv-init.pth"
         else:
-            config.train.load_model = f"{config.train.proj_dir}/rwkv-{max_p}.pth"
+            config.train.load_model = f"{config.runtime.proj_path}/rwkv-{max_p}.pth"
             if config.train.warmup_steps < 0:
                 if config.train.train_stage == 2:
                     config.train.warmup_steps = 10
@@ -87,9 +99,9 @@ if __name__ == "__main__":
         f"""
 ############################################################################
 #
-# Model {config.model.model_type} {config.train.precision.upper()} on {config.train.num_nodes}x{config.train.devices} {config.train.accelerator.upper()}, bsz {config.train.num_nodes}x{config.train.devices}x{config.train.micro_bsz}={runtime_config.global_step_bsz}, {config.train.strategy} {'with grad_cp' if config.train.grad_cp > 0 else ''}
+# Model {model_name} {config.train.precision.upper()} on {config.train.num_nodes}x{config.train.devices} {config.train.accelerator.upper()}, bsz {config.train.num_nodes}x{config.train.devices}x{config.train.micro_bsz}={runtime_config.global_step_bsz}, {config.train.strategy} {'with grad_cp' if config.train.grad_cp > 0 else ''}
 #
-# Data = {config.train.data_file} ({config.train.data_type}), ProjDir = {config.train.proj_dir}
+# Data = {config.train.data_file} ({config.train.data_type}), ProjDir = {config.runtime.proj_path}
 #
 # Epoch = {config.train.epoch_begin} to {config.runtime.epoch_count - 1} (will continue afterwards), save every {config.train.epoch_save} epoch
 #
@@ -168,7 +180,7 @@ if __name__ == "__main__":
         wrapper = LightningModelWrapper(model, config)
 
     if len(config.train.load_model) == 0 or config.train.train_stage == 1:  # should we build the initial weights?
-        init_weight_name = f"{config.train.proj_dir}/rwkv-init.pth"
+        init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"
         generate_init_weight(model, config, init_weight_name)  # save initial weights
         config.train.load_model = init_weight_name
 

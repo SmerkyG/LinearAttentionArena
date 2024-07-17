@@ -57,7 +57,7 @@ class train_callback(pl.Callback):
                     my_save(
                         config, trainer,
                         pl_module.model.state_dict(),
-                        f"{config.train.proj_dir}/rwkv-final.pth",
+                        f"{config.runtime.proj_path}/rwkv-final.pth",
                     )
                     print("!!!TRAINING COMPLETE!!!")
                     exit(0)
@@ -86,7 +86,7 @@ class train_callback(pl.Callback):
             if trainer.is_global_zero:  # logging
                 trainer.my_loss_sum = 0
                 trainer.my_loss_count = 0
-                trainer.my_log = open(config.train.proj_dir + "/train_log.txt", "a")
+                trainer.my_log = open(config.runtime.proj_path + "/train_log.txt", "a")
                 trainer.my_log.write(f"NEW RUN {config.runtime.my_timestamp}\n{vars(self.config)}\n")
                 try:
                     print(f"\n{trainer.strategy.config}\n")
@@ -142,7 +142,7 @@ class train_callback(pl.Callback):
                     my_save(
                         config, trainer,
                         pl_module.model.state_dict(),
-                        f"{config.train.proj_dir}/rwkv-final.pth",
+                        f"{config.runtime.proj_path}/rwkv-final.pth",
                     )
                 
 
@@ -165,7 +165,7 @@ class train_callback(pl.Callback):
                     my_save(
                         config, trainer,
                         pl_module.model.state_dict(),
-                        f"{config.train.proj_dir}/rwkv-{trainer.current_epoch}.pth",
+                        f"{config.runtime.proj_path}/rwkv-{trainer.current_epoch}.pth",
                     )
                 except Exception as e:
                     print('Error\n\n', e, '\n\n')

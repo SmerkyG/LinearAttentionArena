@@ -41,21 +41,6 @@ try:
 except:
     os.environ["RWKV_MODEL_TYPE"] = ''
 
-# import timemix modules based on model type name
-model_type = os.environ["RWKV_MODEL_TYPE"]
-for model_subtype in model_type.split('_'):
-    if not importlib.util.find_spec('src.tmix_' + model_subtype):
-        print(f"couldn't find src.tmix_{model_subtype}, despite it being listed as part of the model name")
-        exit()
-    importlib.import_module('src.tmix_' + model_subtype)
-
-
-########################################################################################################
-# CUDA Kernel
-########################################################################################################
-
-HEAD_SIZE = int(os.environ["RWKV_HEAD_SIZE_A"])
-
 ########################################################################################################
 # The RWKV Model with our blocks
 ########################################################################################################
@@ -67,6 +52,8 @@ class BlockState:
 
 def get_second_submodel_layer_id(model_config:Model_Config):
     return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
+
+from pydoc import locate
 
 class Block(nn.Module):
     def __init__(self, config:Model_Config, layer_id):
@@ -80,72 +67,36 @@ class Block(nn.Module):
         if self.layer_id == 0:
             self.ln0 = nn.LayerNorm(config.n_embd)
 
-        self.parallel = False
-
-        ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(config, layer_id)
-
-        mt = config.model_type
-        if 'parallel' in mt:
-            self.parallel = True
-
-        model_subtypes = mt.split('_')
-        match model_subtypes[0]:
-            case 'x060bbswa':
-                attFactory = lambda: RWKV_Tmix_x060bbswa(config, layer_id)
-            case 'x060c2':
-                attFactory = lambda: src.tmix_x060c2.RWKV_Tmix_x060c2(config, layer_id)
-            case 'x060b':
-                attFactory = lambda: src.tmix_x060b.RWKV_Tmix_x060b(config, layer_id)
-            case 'x052':
-                attFactory = lambda: src.tmix_x052.RWKV_Tmix_x052(config, layer_id)
-                ffnFactory = lambda: src.cmix_x052.RWKV_CMix_x052(config, layer_id)
-            case 'x060':
-                attFactory = lambda: src.tmix_x060.RWKV_Tmix_x060(config, layer_id)
-            case 'gptalpha':
-                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(config, layer_id)
-            case 'llama':
-                attFactory = lambda: src.tmix_llama.Llama_Tmix(config, layer_id)
-                ffnFactory = lambda: src.tmix_llama.Llama_CMix(config, layer_id)
-            case 'mamba':
-                attFactory = lambda: src.tmix_mamba.Mamba(config, layer_id)
-                ffnFactory = lambda: src.tmix_mamba.MambaFFN(config, layer_id)
-            case _:
-                print(f"Unsupported model type: {mt}")
-                exit(0)
-        
-        if len(model_subtypes) > 1 and 'taylor' in model_subtypes:
-            if layer_id >= get_second_submodel_layer_id(config): #config.n_layer * 2 // 3 - 1 and layer_id < config.n_layer - 1:
-                if 'taylorchunked' in mt:
-                    attFactory = lambda: src.tmix_taylorchunked.RWKV_Tmix_taylorchunked(config, layer_id)
-                else:
-                    attFactory = lambda: src.tmix_taylor.RWKV_Tmix_taylor(config, layer_id)
-
-        if len(model_subtypes) > 1 and model_subtypes[1] == 'gptalpha':
-            if layer_id >= get_second_submodel_layer_id(config):
-                attFactory = lambda: src.tmix_gptalpha.GPTAlpha_Tmix(config, layer_id)
-
-        self.is_cache_once = len(model_subtypes) > 1 and model_subtypes[1] == 'gold'
-        if self.is_cache_once:
-            if layer_id >= get_second_submodel_layer_id(config) and layer_id < config.n_layer:
-                if model_subtypes[1] == 'goldbha':
-                    attFactory = lambda: src.tmix_goldbha.GPTAlpha_Tmix_goldbha(config, layer_id)
-                else:
-                    attFactory = lambda: src.tmix_gold.GPTAlpha_Tmix_gold(config, layer_id)
-                if model_subtypes[0] == 'mamba':
-                    ffnFactory = lambda: src.cmix_x060.RWKV_CMix_x060(config, layer_id)
-
-        self.att = attFactory()
-        self.default_time_mix_state_factory = self.att.get_default_state_factory() if hasattr(self.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
-        self.att = TJIT(self.att)
-        
-        if ffnFactory is None:
-            self.ln2 = None
-            self.ffn = None
+        if config.tmix2 == '' or layer_id < get_second_submodel_layer_id(config):
+            # first layer type
+            tmix = config.tmix
+            cmix = config.cmix
         else:
-            self.ffn = ffnFactory()
-        self.default_channel_mix_state_factory = self.ffn.get_default_state_factory() if hasattr(self.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
-        self.ffn = TJIT(self.ffn)
+            # second layer type
+            tmix = config.tmix2
+            cmix = config.cmix2       
+        
+        tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
+        tmix_factory = locate(tmix_typepath)
+        if tmix_factory is None:
+            print(f"Unsupported tmix model type: {tmix_typepath}")
+            exit(0)
+        tmix:nn.Module = tmix_factory(config, layer_id)
+        
+        cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
+        cmix_factory = locate(cmix_typepath)
+        if cmix_factory is None:
+            print(f"Unsupported cmix model type: {cmix_typepath}")
+            exit(0)
+        cmix:nn.Module = cmix_factory(config, layer_id)
+       
+        self.is_cache_once = config.tmix2 == 'gold'
 
+        self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
+        self.att = TJIT(tmix)
+        
+        self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        self.ffn = TJIT(cmix)
 
         if config.dropout > 0:
             self.drop0 = nn.Dropout(p = config.dropout)
@@ -155,15 +106,11 @@ class Block(nn.Module):
             self.drop1 = nn.Identity()
 
     def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
-        B, T, C = x.size()
-        # if self.layer_id == 0:
-        #     x = self.ln0(x)
-
         last_block_state = last_model_state.block_states[self.layer_id]
 
         # if len(kv_cache.shape) > 0:
         #     att_x = (att_x, kv_cache)
-        if not self.parallel:
+        if not self.config.parallel:
             if self.att is not None:
                 dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
                 x = self.drop0(x + dx)
@@ -211,9 +158,7 @@ class Transformer(nn.Module):
         assert args.dim_att % 32 == 0
         assert args.dim_ffn % 32 == 0
 
-        mt = config.model.model_type
-        self.is_cache_once = '_gold' in mt
-        self.is_llama = mt.startswith('llama')
+        self.is_cache_once = args.tmix2 == 'gold'
 
         self.shared = Shared()
 
@@ -417,7 +362,7 @@ class Transformer(nn.Module):
                     scale = 0.5
                 nn.init.orthogonal_(m[n], gain=scale)
                 print(f" [scale {scale}]")
-            elif 'mamba' in self.config.model.model_type and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_second_submodel_layer_id(self.config.model))):
+            elif 'mamba' in self.config.model.tmix and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_second_submodel_layer_id(self.config.model))):
                 m[n] = p
                 if '.out_proj.weight' in n:
                     scale = 0

@@ -1,13 +1,11 @@
 import torch
 from torch import nn, Tensor
-from .CoreDependencies import *
 
-from .cmix import ChannelMixState
+from src.cmix import ChannelMixState
 from .cmix_rwkv_base import get_default_state
 
-class RWKV_CMix_x052(nn.Module):
-    def get_default_state(self, **args):
-        return get_default_state(**args)
+class CMix_x060(nn.Module):
+    def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args, layer_id):
         super().__init__()
@@ -20,18 +18,19 @@ class RWKV_CMix_x052(nn.Module):
             ddd = torch.ones(1, 1, args.n_embd)
             for i in range(args.n_embd):
                 ddd[0, 0, i] = i / args.n_embd
-            self.time_mix_k = nn.Parameter(torch.pow(ddd, ratio_1_to_almost0))
-            self.time_mix_r = nn.Parameter(torch.pow(ddd, ratio_1_to_almost0))
-        
+            self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
+            self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
+
         self.key = nn.Linear(args.n_embd, args.dim_ffn, bias=False)
         self.receptance = nn.Linear(args.n_embd, args.n_embd, bias=False)
         self.value = nn.Linear(args.dim_ffn, args.n_embd, bias=False)
 
     def forward(self, x, last_state:ChannelMixState):
         shift_state = x[:, -1].clone()
-        xx = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1)
-        xk = x * self.time_mix_k + xx * (1 - self.time_mix_k)
-        xr = x * self.time_mix_r + xx * (1 - self.time_mix_r)
+        dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
+        xk = x + dxprev * self.time_maa_k
+        xr = x + dxprev * self.time_maa_r
+
         k = self.key(xk)
         k = torch.relu(k) ** 2
         kv = self.value(k)

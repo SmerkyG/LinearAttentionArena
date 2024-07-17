@@ -1,4 +1,5 @@
 model:
     __type__: configs.FinchC2_Config
-    model_type: x060c2_gold
+    tmix: x060c2
+    tmix2: gold
     inv_other_layer_ratio: 3

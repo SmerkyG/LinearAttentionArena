@@ -1,6 +1,7 @@
 model:
     __type__: configs.Transformer_Config
-    model_type: x060_gold
+    tmix: x060
+    tmix2: gold
     inv_other_layer_ratio: 6
 
 train:

@@ -19,7 +19,7 @@ wget --continue -O data/minipile.bin https://huggingface.co/datasets/BlinkDL/min
 ```
 
 support for validation sets has been added
-to download the minipile validation set you'll need to run the supplied `convert.py` and then obtain binidx conversion tool at `https://github.com/BlinkDL/RWKV-LM/blob/main/RWKV-v5/make_data.py` and run that
+to download the minipile validation set you'll need to run the supplied `get_minipile.py` and then obtain binidx conversion tool at `https://github.com/BlinkDL/RWKV-LM/blob/main/RWKV-v5/make_data.py` and run that
 
 ## configuration
 
@@ -29,16 +29,21 @@ you can also list specific config parameters e.g. `--model.n_layer 12 --train.lr
 
 see configs.py for specific configuration settings in dataclasses
 
-model.model_type is the variety of model
-this supports two-in-one models separated by underscore, like `--model.model_type x060b2_goco` (goldfinch)
+model.tmix is the first variety of time mixer, becomes the class at path f'tmix.tmix_{tmix}.TMix_{tmix}'
+model.tmix2 is the second variety of time mixer, if any
+model.cmix is the first variety of channel mixer
+model.cmix2 is the second variety of channel mixer, if any
+model.inv_other_layer_ratio is the ratio of second variety layers to all layers (e.g. 3 means 2/3 of the first variety and 1/3 of the second variety)
 
 ## running it
 
 to create the starting initial state for a model run prepare.py with --train.train_stage 1:
-`python train.py -c configs/L12D768minipile.yaml -c configs/goldfinch.yaml --train.proj_dir out/L12-D768-x060b2_goco-0 --train.train_stage 1"`
+`python train.py -c configs/L12D768minipile.yaml -c configs/goldfinch.yaml --train.train_stage 1`
 
 then to train the model:
-`python train.py -c configs/L12D768minipile.yaml -c configs/goldfinch.yaml --train.proj_dir out/L12-D768-x060b2_goco-0"`
+`python train.py -c configs/L12D768minipile.yaml -c configs/goldfinch.yaml `
+
+use train.proj_dir, train.proj_name, and train.proj_suffix to change dir from defaulting to something like "out/" + "L12-D768-x060c2_gold" + "-0"
 
 beware, it will continue from any numbered saved checkpoints still in the directory (if running again in the same dir)
 

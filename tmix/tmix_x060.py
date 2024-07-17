@@ -1,13 +1,15 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-from .CoreDependencies import *
-from .cuda6 import RUN_CUDA_RWKV6
+from src.cuda6 import RUN_CUDA_RWKV6
+from configs import Transformer_Config
+from src.tmix import TimeMixState, Shared
+from .tmix_rwkv_base import get_default_state
 
-from .tmix import TimeMixState, Shared
+class TMix_x060(nn.Module):   
+    def get_default_state_factory(self): return get_default_state
 
-class RWKV_Tmix_x060b4(nn.Module):
-    def __init__(self, args, layer_id):
+    def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
@@ -24,27 +26,22 @@ class RWKV_Tmix_x060b4(nn.Module):
                 ddd[0, 0, i] = i / args.n_embd
 
             self.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
-            self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
+            self.time_maa_w = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_k = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
             self.time_maa_v = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
-            self.time_maa_w = nn.Parameter(1.0 - torch.pow(ddd, ratio_1_to_almost0))
-            self.time_maa_v2 = nn.Parameter(1.0 - (torch.pow(ddd, ratio_1_to_almost0) + 0.3 * ratio_0_to_1))
+            self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
+            self.time_maa_g = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
             D_MIX_LORA = 32
+            self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*5))
             self.time_maa_w2 = nn.Parameter(torch.zeros(5, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
-            self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*self.time_maa_w2.size(0)))
 
-            #decay_speed = torch.ones(args.dim_att) * 2
             decay_speed = torch.ones(args.dim_att)
             for n in range(args.dim_att):
                 decay_speed[n] = -6 + 5 * (n / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1)
             self.time_decay = nn.Parameter(decay_speed.reshape(1,1,args.dim_att))
-            D_DECAY_LORA = 64 # max(args.n_embd // 12, 64) // 8 * 8
+            D_DECAY_LORA = 64
             self.time_decay_w1 = nn.Parameter(torch.zeros(args.n_embd, D_DECAY_LORA))
             self.time_decay_w2 = nn.Parameter(torch.zeros(D_DECAY_LORA, args.dim_att).uniform_(-0.01, 0.01))
-
-            D_ADAPT_LORA = max(args.n_embd // 12, 64) // 8 * 8
-            self.time_adapt_w1 = nn.Parameter(torch.zeros(4, args.n_embd, D_ADAPT_LORA))
-            self.time_adapt_w2 = nn.Parameter(torch.zeros(4, D_ADAPT_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
             tmp = torch.zeros(args.dim_att)
             for n in range(args.dim_att):
@@ -52,8 +49,13 @@ class RWKV_Tmix_x060b4(nn.Module):
                 tmp[n] = ratio_0_to_1 * (1 - (n / (args.dim_att - 1))) + zigzag
             self.time_faaaa = nn.Parameter(tmp.reshape(self.n_head, self.head_size))
 
+        self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
+
+        self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
-        self.ln_x = nn.LayerNorm(args.dim_att)
+        self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
 
     def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, T, C = x.size()
@@ -63,35 +65,31 @@ class RWKV_Tmix_x060b4(nn.Module):
         dxprev = torch.concat((last_state.shift_state.unsqueeze(1), x[:, :-1]), dim=1) - x
 
         xxx = x + dxprev * self.time_maa_x
-        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, self.time_maa_w2.size(0), -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_w2).view(self.time_maa_w2.size(0), B, T, C)
+        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, self.time_maa_w2).view(5, B, T, C)
 
-        # xr, xk, xv, xv2, xw = (x + dxprev * (self.time_maa_all.view(5, 1, 1, C) + xxx)).unbind(dim=0)
-        mr, mk, mv, mw, mv2 = xxx.unbind(dim=0)
-        xr = x + dxprev * (self.time_maa_r + mr)
+        mw, mk, mv, mr, mg = xxx.unbind(dim=0)
+        xw = x + dxprev * (self.time_maa_w + mw)
         xk = x + dxprev * (self.time_maa_k + mk)
         xv = x + dxprev * (self.time_maa_v + mv)
-        xw = x + dxprev * (self.time_maa_w + mw)
-        xv2 = x + dxprev * (self.time_maa_v2 + mv2)
-
-        dxr, dxk, dxv, dxv2 = (torch.tanh(torch.stack([xr, xk, xv, xv2], dim=0).view(4, B*T, C) @ self.time_adapt_w1) @ self.time_adapt_w2).view(4, B, T, C).unbind(dim=0)
+        xr = x + dxprev * (self.time_maa_r + mr)
+        xg = x + dxprev * (self.time_maa_g + mg)
         
-        r = xr + dxr
-        k = xk + dxk
-        v = xv + dxv
-        v2 = xv2 + dxv2
-
-        w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
-
-        k = k * (1 - (-w.exp()).exp())
-        u = torch.zeros_like(self.time_faaaa)
+        r = self.receptance(xr)
+        k = self.key(xk)
+        v = self.value(xv)
+        g = F.silu(self.gate(xg))
+        
+        w = (self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2).to(r.dtype)
+        u = self.time_faaaa
 
         wkv_state = last_state.wkv_state.clone()
-        y = RUN_CUDA_RWKV6(r, k, v, w, u, wkv_state)
-        y = y + v2
+        x = RUN_CUDA_RWKV6(r, k, v, w, u, wkv_state)
+        x = x.view(B * T, C)
 
-        y = self.ln_x(y)
-        #y = F.layer_norm(y.float(), self.ln_x.normalized_shape, self.ln_x.weight.float(), self.ln_x.bias.float()).to(y.dtype)
-
-        y = self.output(y)
-        return y, TimeMixState(wkv_state, shift_state)
+        if self.training:
+            x = self.ln_x(x).view(B, T, C)
+        else:
+            x = F.group_norm(x.float(), self.ln_x.num_groups, self.ln_x.weight.float(), self.ln_x.bias.float(), eps=self.ln_x.eps).to(r.dtype).view(B, T, C)
+        x = self.output(x * g)
+        return x, TimeMixState(wkv_state, shift_state)

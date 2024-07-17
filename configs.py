@@ -4,7 +4,11 @@ import typing
 
 @dataclass(kw_only=True)
 class Model_Config:
-    model_type: str
+    tmix: str = 'x060'
+    tmix2: str = ''
+    cmix: str = 'x060'
+    cmix2: str = 'x060'
+    parallel:int = 0
     ctx_len:int = 1024
     vocab_size:int = 0
     n_layer:int = 6
@@ -45,6 +49,7 @@ class FinchC2_Config(Transformer_Config):
 @dataclass(kw_only=True)
 class Runtime_Config:
     run_name:str = ''
+    proj_path:str = '.'
     my_timestamp:str = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
     global_step_bsz:int = 0
     my_pile_prev_p:int = 0
@@ -58,6 +63,8 @@ class Train_Config:
     load_model:str = ''
     wandb:str = ''
     proj_dir:str = 'out'
+    proj_name:str = ''
+    proj_suffix:str = '0'
 
     epoch_begin:int = 0
     epoch_save:int = 5
@@ -266,8 +273,12 @@ def typecheck(path : str, obj : typing.Any, required_type : type = typing.Any):
                         obj[k] = param.default
 
         elif required_type != typing.Any and not isinstance(obj, required_type) and not (required_type == float and isinstance(obj, int)):
-            errors += f"Config Type Mismatch: expected {type_name(required_type)} but got {type_name(type(obj))}\n in config setting `{path}` : {type_name(required_type)} = {obj}\n"
-            return errors
+            if required_type == str and isinstance(obj, int):
+                # allow conversion to string, if we wanted a string
+                obj = str(obj)
+            else:
+                errors += f"Config Type Mismatch: expected {type_name(required_type)} but got {type_name(type(obj))}\n in config setting `{path}` : {type_name(required_type)} = {obj}\n"
+                return errors
 
     except Exception as ex:
         raise Exception(f'internal config type checking exception at path "{path}": {required_type} {ex}')
