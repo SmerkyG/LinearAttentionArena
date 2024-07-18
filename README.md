@@ -22,10 +22,10 @@ Two of the biggest problems that transformers face are the quadratic slowdown fr
 
 This unlocks the potential for extremely large context lengths, without requiring large amounts of VRAM. Imagine putting in a whole codebase or stack of legal documents and asking questions about them. And if you happen to require only short answers you avoid most of the quadratic cost of attention. This is a major cost savings.
 
-And the best part is that GoldFinch **outperforms** larger sized models of Llama and Finch (RWKV-6) on downstream tasks!
+And the best part is that in our experiments, GoldFinch **outperforms** larger sized models of Llama and Finch (RWKV-6) on downstream tasks!
 
 <div align="center" >
-    <img src="assets/evals.png" height=114 alt="GoldFinch evals" /> 
+    <img src="assets/evals.png" height=159 alt="GoldFinch evals" /> 
 </div>
 
 <div align="center" >
@@ -79,19 +79,23 @@ you can also list specific config parameters e.g. `--model.n_layer 12 --train.lr
 
 see configs.py for specific configuration settings in dataclasses
 
-model.tmix is the first variety of time mixer, becomes the class at path f'tmix.tmix_{tmix}.TMix_{tmix}'
-model.tmix2 is the second variety of time mixer, if any
-model.cmix is the first variety of channel mixer
-model.cmix2 is the second variety of channel mixer, if any
-model.inv_other_layer_ratio is the ratio of second variety layers to all layers (e.g. 3 means 2/3 of the first variety and 1/3 of the second variety)
+`model.tmix` is the first variety of time mixer, becomes the class at path `f'tmix.tmix_{tmix}.TMix_{tmix}'`
+
+`model.tmix2` is the second variety of time mixer, if any
+
+`model.cmix` is the first variety of channel mixer
+
+`model.cmix2` is the second variety of channel mixer, if any
+
+`model.inv_other_layer_ratio` is the ratio of second variety layers to all layers (e.g. 3 means 2/3 of the first variety and 1/3 of the second variety)
 
 ## running it
 
 to create the starting initial state for a model run prepare.py with --train.train_stage 1:
-`python train.py -c configs/L12D768minipile.yaml -c configs/goldfinch.yaml --train.train_stage 1`
+`python train.py -c configs/L12D768ctx1024minipile.yaml -c configs/goldfinch.yaml --train.train_stage 1`
 
 then to train the model:
-`python train.py -c configs/L12D768minipile.yaml -c configs/goldfinch.yaml `
+`python train.py -c configs/L12D768ctx1024minipile.yaml -c configs/goldfinch.yaml `
 
 use `train.proj_dir`, `train.proj_name`, and `train.proj_suffix` to change dir from defaulting to something like `"out/" + "L12-D768-x060c2_gold" + "-0"`
 
