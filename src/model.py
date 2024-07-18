@@ -101,8 +101,6 @@ class Block(nn.Module):
     def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
         last_block_state:BlockState = last_model_state.block_states[self.layer_id]
 
-        # if len(kv_cache.shape) > 0:
-        #     att_x = (att_x, kv_cache)
         if not self.parallel:
             if self.att is not None:
                 dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
