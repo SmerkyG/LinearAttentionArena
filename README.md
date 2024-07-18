@@ -4,6 +4,8 @@
 # GoldFinch 
 ## High Performance RWKV/Transformer Hybrid <br> with Linear Pre-Fill and Extreme KV-Cache Compression
 
+Paper link: https://arxiv.org/abs/2407.12077 Checkpoints: https://huggingface.co/recursal/GoldFinch-paper
+
 </div>
 
 GoldFinch combines the best parts of Linear Attention (via RWKV) and traditional Transformers to create something that is better than either one on its own!
@@ -20,7 +22,7 @@ Two of the biggest problems that transformers face are the quadratic slowdown fr
 
 This unlocks the potential for extremely large context lengths, without requiring large amounts of VRAM. Imagine putting in a whole codebase or stack of legal documents and asking questions about them. And if you happen to require only short answers you avoid most of the quadratic cost of attention. This is a major cost savings.
 
-And the best part is that GoldFinch **outperforms** larger sized models of Llama and Finch (RWKV-6) both during training and on downstream tasks!
+And the best part is that GoldFinch **outperforms** larger sized models of Llama and Finch (RWKV-6) on downstream tasks!
 
 <div align="center" >
     <img src="assets/evals.png" height=114 alt="GoldFinch evals" /> 
@@ -34,7 +36,7 @@ You get the ability to look back at every single token that came in like a full 
 
 We also provide the new Finch-C2, a higher downstream performance version of Finch (RWKV-6), and GPTAlpha, an enhanced full transformer architecture with RWKV components that uses softmax attention and outperforms traditional transformers.
 
-Please see our GoldFinch paper for more details.
+Please see the GoldFinch paper at https://arxiv.org/abs/2407.12077 for more details.
 
 ## What's included in this repository
 
