@@ -27,7 +27,7 @@ class MyDataset(Dataset):
         rank_zero_info(f"Data has {self.data_size} tokens.")
 
         self.samples_per_epoch = config.runtime.epoch_global_steps * config.runtime.global_step_bsz
-        assert self.samples_per_epoch == 40320
+        #assert self.samples_per_epoch == 40320
         rank_zero_info(f"########## training stage {config.train.train_stage} ##########")
         dataset_slot = self.data_size // config.model.ctx_len
         assert config.train.my_exit_tokens <= self.data_size
