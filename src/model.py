@@ -207,7 +207,11 @@ class Transformer(nn.Module):
         if self.training:
             patch_size = self.config.runtime.patch_size
             if patch_size > 1:
-                x = torch.mean(x.view(B, T//patch_size, patch_size, -1), dim=2, keepdim=False)
+                if self.config.train.patch_batch:
+                    # vertical patches
+                    x = x.view(patch_size, B//patch_size, T, -1).mean(0)
+                else:
+                    x = torch.mean(x.view(B, T//patch_size, patch_size, -1), dim=2, keepdim=False)
 
         total_n_layer = config.n_layer
 

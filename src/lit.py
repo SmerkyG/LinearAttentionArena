@@ -72,21 +72,32 @@ class LightningModelWrapper(pl.LightningModule):
         x, y = batch
         logits, next_model_state = self(x, last_model_state)
 
-        patch_size = self.config.runtime.patch_size
-        if patch_size > 1:
-            flat_logits = logits[..., :-1, :].reshape(-1, logits.size(-1))
-            flat_y = y[..., patch_size-1:-1].reshape(-1, patch_size)
-            loss = 0.0
-            for i in range(patch_size):
-                loss = loss + F.cross_entropy(flat_logits, flat_y[:, i]) / patch_size
+        if self.training and self.config.runtime.patch_size > 1:
+            patch_size = self.config.runtime.patch_size
+            if self.config.train.patch_batch:
+                # vertical patches
+                flat_logits = logits.view(-1, logits.size(-1))
+                flat_y = y.view(patch_size, -1)
+                loss = 0.0
+                for i in range(patch_size):
+                    loss = loss + F.cross_entropy(flat_logits, flat_y[i]) / patch_size
+            else:
+                flat_logits = logits[..., :-1, :].reshape(-1, logits.size(-1))
+                flat_y = y[..., patch_size-1:-1].reshape(-1, patch_size)
+                loss = 0.0
+                for i in range(patch_size):
+                    loss = loss + F.cross_entropy(flat_logits, flat_y[:, i]) / patch_size
         else:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
         
         with torch.no_grad():
             preds = logits.argmax(dim=-1)
-            if patch_size > 1:
+            if self.training and self.config.runtime.patch_size > 1:
                 B, T = preds.shape
-                preds = preds.view(B, T, 1).expand(B, T, patch_size).reshape(B, T * patch_size)
+                if self.config.train.patch_batch:
+                    preds = preds.view(1, B, T).expand(patch_size, B, T).reshape(B * patch_size, T)
+                else:
+                    preds = preds.view(B, T, 1).expand(B, T, patch_size).reshape(B, T * patch_size)
 
         if loss.isinf().any():
             raise Exception("loss was infinite")
@@ -98,11 +109,17 @@ class LightningModelWrapper(pl.LightningModule):
     
     def get_real_global_step(self): return int(self.trainer.global_step + self.config.train.epoch_begin * self.config.runtime.epoch_global_steps)
     def get_real_tokens(self): return self.get_real_global_step() * self.config.model.ctx_len * self.config.runtime.global_step_bsz
-    def get_progress(self):
+    def get_real_progress(self):
         config = self.config
-        w_steps = config.train.warmup_steps
-        warmup_tokens = w_steps * config.model.ctx_len * config.runtime.global_step_bsz
-        progress = (self.get_real_tokens() - warmup_tokens) / (abs(config.train.my_exit_tokens) - warmup_tokens)
+        progress = self.get_real_tokens() / abs(config.train.my_exit_tokens)
+        progress = max(0, min(1, progress))
+        return progress
+    def get_lr_progress(self):
+        config = self.config
+        wait_tokens = int(config.train.lr_wait * config.train.my_exit_tokens)
+        warmup_tokens = config.train.warmup_steps * config.model.ctx_len * config.runtime.global_step_bsz
+        token_offset = warmup_tokens + wait_tokens
+        progress = (self.get_real_tokens() - token_offset) / (abs(config.train.my_exit_tokens) - token_offset)
         progress = max(0, min(1, progress))
         return progress
 

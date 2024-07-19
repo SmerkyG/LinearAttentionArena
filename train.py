@@ -58,10 +58,11 @@ if __name__ == "__main__":
 
     assert config.train.train_stage > 0
 
-    runtime_config.epoch_count = config.train.magic_prime // 40320
+    EPOCH_SAMPLE_SIZE = 40320
+    runtime_config.epoch_count = config.train.magic_prime // EPOCH_SAMPLE_SIZE
 
-    runtime_config.epoch_global_steps = 40320 // runtime_config.global_step_bsz
-    assert runtime_config.epoch_global_steps * runtime_config.global_step_bsz == 40320
+    runtime_config.epoch_global_steps = EPOCH_SAMPLE_SIZE // runtime_config.global_step_bsz
+    assert runtime_config.epoch_global_steps * runtime_config.global_step_bsz == EPOCH_SAMPLE_SIZE
     if config.train.train_stage >= 2:  # find latest saved model
         list_p = []
         for p in os.listdir(config.runtime.proj_path):

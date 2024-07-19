@@ -71,6 +71,8 @@ class Train_Config:
     epoch_save:int = 5
     micro_bsz:int = 12
 
+    lr_decay_type:str = 'cos'
+    lr_wait:float = 0.0
     lr_init:float = 6e-4
     lr_final:float = 1e-5
     warmup_steps:int = -1
@@ -107,6 +109,7 @@ class Train_Config:
     data_type:str = 'utf-8'
 
     patch_size:int = 1
+    patch_batch:int = 0
 
 @dataclass(kw_only=True)
 class TrainerCLI_Config:

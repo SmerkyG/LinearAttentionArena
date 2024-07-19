@@ -30,29 +30,22 @@ class train_callback(pl.Callback):
         #     torch.cuda.empty_cache()
 
         # LR schedule
-        if config.train.lr_final == config.train.lr_init or config.runtime.epoch_count == 0:
+        if config.runtime.epoch_count == 0 or config.train.my_exit_tokens == 0:
             lr = config.train.lr_init
         else:
-            progress = pl_module.get_progress()
+            lr_progress = pl_module.get_lr_progress()
 
-            if config.train.lr_final == 0 or config.train.lr_init == 0:  # linear decay
-                lr = config.train.lr_init + (config.train.lr_final - config.train.lr_init) * progress
-            else:  # exp decay
-                lr = config.train.lr_init * math.exp(math.log(config.train.lr_final / config.train.lr_init) * pow(progress, 1))
-            # if trainer.is_global_zero:
-            #     print(trainer.global_step, decay_step, decay_total, w_step, progress, lr)
+            match config.train.lr_decay_type:
+                case 'linear':
+                    lr = config.train.lr_init + (config.train.lr_final - config.train.lr_init) * lr_progress
+                case 'exp':
+                    lr = config.train.lr_init * math.exp(math.log(config.train.lr_final / config.train.lr_init) * pow(lr_progress, 1))
+                case 'cos':
+                    lr_final_factor = config.train.lr_final / config.train.lr_init                
+                    lr_mult = (0.5 + lr_final_factor / 2) + (0.5 - lr_final_factor / 2) * math.cos(math.pi * lr_progress)
+                    lr = config.train.lr_init * lr_mult
 
-        if config.train.my_exit_tokens != 0: # cosine decay
-            progress = pl_module.get_progress()
-            # cosine decay
-            lr_final_factor = config.train.lr_final / config.train.lr_init                
-            lr_mult = (0.5 + lr_final_factor / 2) + (0.5 - lr_final_factor / 2) * math.cos(math.pi * progress)
-            lr = config.train.lr_init * lr_mult
-
-            # last 20% linear decay
-            #lr = config.train.lr_init + (config.train.lr_final - config.train.lr_init) * (max(0, progress - 0.8) / 0.8)
-
-            if progress >= 1:
+            if lr_progress >= 1:
                 if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy):
                     my_save(
                         config, trainer,
@@ -85,7 +78,7 @@ class train_callback(pl.Callback):
 
         # update patch size
         if self.config.train.patch_size < 1:
-            progress = self.get_progress()
+            progress = self.get_real_progress()
             self.config.runtime.patch_size = max(1, 2 ** (3 - int(progress / 0.25)))
         else:
             self.config.runtime.patch_size = self.config.train.patch_size
