@@ -44,7 +44,7 @@ class train_callback(pl.Callback):
                 case 'cos':
                     init_amt = math.cos(math.pi / 2 * lr_progress)
                     lr = config.train.lr_final + (config.train.lr_init - config.train.lr_final) * init_amt
-                case 'sqrt':
+                case 'oneminussqrt':
                     init_amt = 1.0 - math.sqrt(lr_progress)
                     lr = config.train.lr_final + (config.train.lr_init - config.train.lr_final) * init_amt
                 case _:

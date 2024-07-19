@@ -94,7 +94,7 @@ class LightningModelWrapper(pl.LightningModule):
         return progress
     def get_lr_progress(self):
         config = self.config
-        wait_tokens = int(config.train.lr_wait * config.train.my_exit_tokens)
+        wait_tokens = int(config.train.lr_wait * abs(config.train.my_exit_tokens))
         warmup_tokens = config.train.warmup_steps * config.model.ctx_len * config.runtime.global_step_bsz
         token_offset = warmup_tokens + wait_tokens
         progress = (self.get_real_tokens() - token_offset) / (abs(config.train.my_exit_tokens) - token_offset)
