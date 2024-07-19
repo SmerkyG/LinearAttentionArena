@@ -19,20 +19,21 @@ class train_callback(pl.Callback):
         super().__init__()
         self.config = config
 
+    def on_train_start(self, trainer, pl_module) -> None:
+        # set current epoch properly so we don't need annoying calculations later on to adjust it
+        trainer.fit_loop.epoch_progress.current.ready = self.config.train.epoch_begin
+        trainer.fit_loop.epoch_progress.current.completed = self.config.train.epoch_begin
+
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         config = self.config
         # if config.cuda_cleanup > 0:
         #     torch.cuda.empty_cache()
-        real_global_step = trainer.global_step + config.train.epoch_begin * config.runtime.epoch_global_steps
 
         # LR schedule
-        w_steps = config.train.warmup_steps
         if config.train.lr_final == config.train.lr_init or config.runtime.epoch_count == 0:
             lr = config.train.lr_init
         else:
-            decay_total = config.runtime.epoch_count * config.runtime.epoch_global_steps
-            progress = (real_global_step - w_steps + 1) / (decay_total - w_steps)
-            progress = min(1, max(0, progress))
+            progress = pl_module.get_progress()
 
             if config.train.lr_final == 0 or config.train.lr_init == 0:  # linear decay
                 lr = config.train.lr_init + (config.train.lr_final - config.train.lr_init) * progress
@@ -42,16 +43,15 @@ class train_callback(pl.Callback):
             #     print(trainer.global_step, decay_step, decay_total, w_step, progress, lr)
 
         if config.train.my_exit_tokens != 0: # cosine decay
-            real_tokens = real_global_step * config.model.ctx_len * config.runtime.global_step_bsz
-            warmup_tokens = w_steps * config.model.ctx_len * config.runtime.global_step_bsz
-            progress = (real_tokens - warmup_tokens) / (abs(config.train.my_exit_tokens) - warmup_tokens)
-            progress = max(0, min(1, progress))
+            progress = pl_module.get_progress()
+            # cosine decay
             lr_final_factor = config.train.lr_final / config.train.lr_init                
             lr_mult = (0.5 + lr_final_factor / 2) + (0.5 - lr_final_factor / 2) * math.cos(math.pi * progress)
-            if config.train.my_exit_tokens > 0:
-                lr = config.train.lr_init * lr_mult
-            else:
-                lr = (lr + config.train.lr_init * lr_mult) / 2
+            lr = config.train.lr_init * lr_mult
+
+            # last 20% linear decay
+            #lr = config.train.lr_init + (config.train.lr_final - config.train.lr_init) * (max(0, progress - 0.8) / 0.8)
+
             if progress >= 1:
                 if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy):
                     my_save(
@@ -61,8 +61,9 @@ class train_callback(pl.Callback):
                     )
                     print("!!!TRAINING COMPLETE!!!")
                     exit(0)
-        if trainer.global_step < w_steps:
-            lr = lr * (0.2 + 0.8 * trainer.global_step / w_steps)
+
+        if trainer.global_step < config.train.warmup_steps:
+            lr = lr * (0.2 + 0.8 * trainer.global_step / config.train.warmup_steps)
 
         if config.train.weight_decay_final > 0:
             wd_now = config.train.weight_decay * math.exp(math.log(config.train.weight_decay_final / config.train.weight_decay) * progress)
@@ -108,7 +109,7 @@ class train_callback(pl.Callback):
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         config = self.config
         tokens_per_micro_step = config.model.ctx_len * config.runtime.global_step_bsz / config.train.accumulate_grad_batches
-        real_global_step = trainer.global_step + config.train.epoch_begin * config.runtime.epoch_global_steps
+        real_global_step = pl_module.get_real_global_step()
         if trainer.is_global_zero:  # logging
             t_now = time.time_ns()
             kt_s = 0

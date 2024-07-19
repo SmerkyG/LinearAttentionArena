@@ -87,6 +87,14 @@ class LightningModelWrapper(pl.LightningModule):
     
     def get_real_global_step(self): return int(self.trainer.global_step + self.config.train.epoch_begin * self.config.runtime.epoch_global_steps)
     def get_real_tokens(self): return self.get_real_global_step() * self.config.model.ctx_len * self.config.runtime.global_step_bsz
+    def get_progress(self):
+        config = self.config
+        w_steps = config.train.warmup_steps
+        warmup_tokens = w_steps * config.model.ctx_len * config.runtime.global_step_bsz
+        progress = (self.get_real_tokens() - warmup_tokens) / (abs(config.train.my_exit_tokens) - warmup_tokens)
+        progress = max(0, min(1, progress))
+        return progress
+
 
     def training_step(self, batch, batch_idx):
         inputs, labels = batch

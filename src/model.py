@@ -9,13 +9,9 @@ import torch.utils.checkpoint
 # torch._C._jit_set_profiling_mode(True)
 import torch.nn as nn
 from torch.nn import functional as F
-import lightning.pytorch as pl
-from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
-from lightning.pytorch.strategies import DeepSpeedStrategy
+from lightning import Trainer
 
 from .state import ModelState, BlockState, ChannelMixState, TimeMixState, Shared
-
-import src
 
 from configs import TrainerCLI_Config, Model_Config, Transformer_Config, Train_Config
 
