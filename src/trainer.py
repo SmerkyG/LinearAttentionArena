@@ -37,13 +37,19 @@ class train_callback(pl.Callback):
 
             match config.train.lr_decay_type:
                 case 'linear':
-                    lr = config.train.lr_init + (config.train.lr_final - config.train.lr_init) * lr_progress
+                    init_amt = 1.0 - lr_progress
+                    lr = config.train.lr_final + (config.train.lr_init - config.train.lr_final) * init_amt
                 case 'exp':
-                    lr = config.train.lr_init * math.exp(math.log(config.train.lr_final / config.train.lr_init) * pow(lr_progress, 1))
+                    lr = config.train.lr_init * math.exp(math.log(config.train.lr_final / config.train.lr_init) * lr_progress)
                 case 'cos':
-                    lr_final_factor = config.train.lr_final / config.train.lr_init                
-                    lr_mult = (0.5 + lr_final_factor / 2) + (0.5 - lr_final_factor / 2) * math.cos(math.pi * lr_progress)
-                    lr = config.train.lr_init * lr_mult
+                    init_amt = math.cos(math.pi / 2 * lr_progress)
+                    lr = config.train.lr_final + (config.train.lr_init - config.train.lr_final) * init_amt
+                case 'oneminussqrt':
+                    init_amt = 1.0 - math.sqrt(lr_progress)
+                    lr = config.train.lr_final + (config.train.lr_init - config.train.lr_final) * init_amt
+                case _:
+                    print("bad lr_decay_type specified")
+                    exit()
 
             if lr_progress >= 1:
                 if (trainer.is_global_zero) or ('deepspeed_stage_3' in config.train.strategy):
@@ -59,7 +65,7 @@ class train_callback(pl.Callback):
             lr = lr * (0.2 + 0.8 * trainer.global_step / config.train.warmup_steps)
 
         if config.train.weight_decay_final > 0:
-            wd_now = config.train.weight_decay * math.exp(math.log(config.train.weight_decay_final / config.train.weight_decay) * progress)
+            wd_now = config.train.weight_decay * math.exp(math.log(config.train.weight_decay_final / config.train.weight_decay) * lr_progress)
         else:
             wd_now = config.train.weight_decay
 
