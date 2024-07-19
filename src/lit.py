@@ -68,14 +68,25 @@ class LightningModelWrapper(pl.LightningModule):
             return cfg.get("offload_optimizer") or cfg.get("offload_param")
         return False
 
-
     def _get_loss_logits_preds(self, batch, batch_idx, last_model_state):
         x, y = batch
         logits, next_model_state = self(x, last_model_state)
-    
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
+
+        patch_size = self.config.runtime.patch_size
+        if patch_size > 1:
+            flat_logits = logits[..., :-1, :].reshape(-1, logits.size(-1))
+            flat_y = y[..., patch_size-1:-1].reshape(-1, patch_size)
+            loss = 0.0
+            for i in range(patch_size):
+                loss = loss + F.cross_entropy(flat_logits, flat_y[:, i]) / patch_size
+        else:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
+        
         with torch.no_grad():
             preds = logits.argmax(dim=-1)
+            if patch_size > 1:
+                B, T = preds.shape
+                preds = preds.view(B, T, 1).expand(B, T, patch_size).reshape(B, T * patch_size)
 
         if loss.isinf().any():
             raise Exception("loss was infinite")
@@ -122,6 +133,7 @@ class LightningModelWrapper(pl.LightningModule):
                     if len(self.config.train.wandb) > 0:
                         self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
 
+        return loss
         return L2Wrap.apply(loss, logits)
 
     def on_validation_epoch_start(self):

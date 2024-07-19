@@ -83,6 +83,13 @@ class train_callback(pl.Callback):
         trainer.my_wd = wd_now
         # rank_zero_info(f"{real_global_step} {lr}")
 
+        # update patch size
+        if self.config.train.patch_size < 1:
+            progress = self.get_progress()
+            self.config.runtime.patch_size = max(1, 2 ** (3 - int(progress / 0.25)))
+        else:
+            self.config.runtime.patch_size = self.config.train.patch_size
+
         if trainer.global_step == 0 and batch_idx == 0:
             if trainer.is_global_zero:  # logging
                 trainer.my_loss_sum = 0

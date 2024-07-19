@@ -55,6 +55,7 @@ class Runtime_Config:
     my_pile_prev_p:int = 0
     epoch_global_steps:int = 999999999
     epoch_count:int = 999999999
+    patch_size:int = 1
 
 @dataclass(kw_only=True)
 class Train_Config:
@@ -104,6 +105,8 @@ class Train_Config:
     data_file:str = ''
     validation_data_file:str = ''
     data_type:str = 'utf-8'
+
+    patch_size:int = 1
 
 @dataclass(kw_only=True)
 class TrainerCLI_Config:

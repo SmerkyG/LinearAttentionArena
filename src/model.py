@@ -203,6 +203,12 @@ class Transformer(nn.Module):
 
         x = self.emb(idx)
 
+        # patches
+        if self.training:
+            patch_size = self.config.runtime.patch_size
+            if patch_size > 1:
+                x = torch.mean(x.view(B, T//patch_size, patch_size, -1), dim=2, keepdim=False)
+
         total_n_layer = config.n_layer
 
         # might need to be true in the future for BPTT support
