@@ -88,7 +88,9 @@ class LightningModelWrapper(pl.LightningModule):
                 log_target=True,
                 reduction='batchmean'
             )
-            training_loss = distillation_loss * self.config.train.teacher.kl_weight + training_loss * self.config.train.teacher.ce_weight
+            training_loss = distillation_loss * self.config.train.teacher.kl_weight
+            if self.config.train.teacher.ce_weight >= 0:
+                training_loss = training_loss + training_loss * self.config.train.teacher.ce_weight
             
         if training_loss.isinf().any():
             raise Exception("loss was infinite")
