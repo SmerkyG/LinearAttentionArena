@@ -39,6 +39,10 @@ if __name__ == "__main__":
     os.environ["RWKV_MODEL_TYPE"] = config.model.tmix
     os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
+    if config.train.teacher is not None and config.train.teacher.path != '':
+        os.environ["RWKV_MODEL_TYPE"] = os.environ["RWKV_MODEL_TYPE"] + '_' + config.train.teacher.model.tmix
+        os.environ["RWKV_CTXLEN"] = str(max(config.model.ctx_len, config.train.teacher.model.ctx_len))
+        # FIXME - no way to account for head_size here, but thank goodness no one uses any size other than 64 for rwkv
 
     model_name = f'{config.model.tmix}'
     if config.model.tmix2 != '':
@@ -173,9 +177,20 @@ if __name__ == "__main__":
                         gradient_clip_val=config.train.gradient_clip_val, 
                         val_check_interval=config.train.val_check_interval)
 
+    teacher = None
+    if config.train.train_stage > 1:
+        teacher_config = config.train.teacher
+        if teacher_config is not None and teacher_config.path != '':
+            load_dict = torch.load(teacher_config.path, map_location="cpu")
+            with trainer.init_module(empty_init=True):
+                teacher = Transformer(teacher_config)
+            teacher.load_state_dict(load_dict)
+            teacher.eval()
+            teacher.requires_grad_(False)
+
     with trainer.init_module(empty_init=True):
         model = Transformer(config)
-        wrapper = LightningModelWrapper(model, config)
+        wrapper = LightningModelWrapper(model, config, teacher)
 
     if config.train.train_stage == 1:  # should we build the initial weights?
         init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"

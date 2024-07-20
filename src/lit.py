@@ -41,10 +41,11 @@ class L2Wrap(torch.autograd.Function):
         return (grad_output, gy)
 
 class LightningModelWrapper(pl.LightningModule):
-    def __init__(self, model:nn.Module, config:TrainerCLI_Config):
+    def __init__(self, model:nn.Module, config:TrainerCLI_Config, teacher:nn.Module|None):
         super().__init__()
         self.model = model
         self.config = config
+        self.teacher = teacher
         self.metrics = dict(loss=metrics.Loss(), acc=metrics.Accuracy())
 
     def forward(self, idx, last_model_state:ModelState|None = None):
@@ -71,19 +72,31 @@ class LightningModelWrapper(pl.LightningModule):
 
     def _get_loss_logits_preds(self, batch, batch_idx, last_model_state):
         x, y = batch
+
         logits, next_model_state = self(x, last_model_state)
     
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
+        reported_loss = training_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.flatten())
         with torch.no_grad():
             preds = logits.argmax(dim=-1)
 
-        if loss.isinf().any():
+        if self.training and self.teacher is not None:
+            with torch.no_grad():
+                teacher_logits, _ = self.teacher.forward(x)
+            distillation_loss = F.kl_div(
+                F.log_softmax(logits.view(-1, logits.size(-1)), dim=-1),
+                F.log_softmax(teacher_logits.view(-1, logits.size(-1)), dim=-1),
+                log_target=True,
+                reduction='batchmean'
+            )
+            training_loss = distillation_loss * self.config.train.teacher.kl_weight + training_loss * self.config.train.teacher.ce_weight
+            
+        if training_loss.isinf().any():
             raise Exception("loss was infinite")
 
-        if loss.isnan().any():
+        if training_loss.isnan().any():
             raise Exception("loss was NaN")
 
-        return loss, logits, preds, next_model_state
+        return reported_loss, training_loss, logits, preds, next_model_state
     
     def get_real_global_step(self): return int(self.trainer.global_step + self.config.train.epoch_begin * self.config.runtime.epoch_global_steps)
     def get_real_tokens(self): return self.get_real_global_step() * self.config.model.ctx_len * self.config.runtime.global_step_bsz
@@ -107,7 +120,7 @@ class LightningModelWrapper(pl.LightningModule):
 
         model_state = None
 
-        loss, logits, preds, model_state = self._get_loss_logits_preds((inputs, labels), batch_idx, model_state)
+        loss, training_loss, logits, preds, model_state = self._get_loss_logits_preds((inputs, labels), batch_idx, model_state)
         margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
         # FIXME - sync from other devices/nodes here
         for metric in self.metrics.values():
@@ -128,7 +141,7 @@ class LightningModelWrapper(pl.LightningModule):
                     if len(self.config.train.wandb) > 0:
                         self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
 
-        return L2Wrap.apply(loss, logits)
+        return L2Wrap.apply(training_loss, logits)
 
     def on_validation_epoch_start(self):
         if self.trainer.is_global_zero:
@@ -157,7 +170,7 @@ class LightningModelWrapper(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         inputs, labels = batch
-        loss, logits, preds, next_block_states = self._get_loss_logits_preds(batch, batch_idx, None)
+        loss, training_loss, logits, preds, next_block_states = self._get_loss_logits_preds(batch, batch_idx, None)
         margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
         for name, metric in self.metrics.items():
             metric.update(margs)

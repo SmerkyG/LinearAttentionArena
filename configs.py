@@ -57,8 +57,21 @@ class Runtime_Config:
     epoch_count:int = 999999999
 
 @dataclass(kw_only=True)
+class InferenceConfig:
+    train:typing.Any = None
+    model: Model_Config
+    path:str = ''
+
+@dataclass(kw_only=True)
+class TeacherConfig(InferenceConfig):
+    kl_weight:float = 0.5
+    ce_weight:float = 0.5
+
+@dataclass(kw_only=True)
 class Train_Config:
     seed_everything:int = 1337
+
+    teacher:TeacherConfig = None
 
     load_model:str = ''
     wandb:str = ''
