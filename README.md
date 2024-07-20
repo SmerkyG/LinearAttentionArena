@@ -104,3 +104,20 @@ beware, it will continue from any numbered saved checkpoints still in the direct
 there is also some lm_eval support in run_lm_eval.py, which also uses the same config system
 
 and dragon_test.py which can be used to run a quick inference test, also with the same system
+
+
+## Citation
+
+If you use this code or find our work valuable, please consider citing GoldFinch:
+
+```bibtex
+@misc{goldstein2024goldfinchhighperformancerwkvtransformer,
+      title={GoldFinch: High Performance RWKV/Transformer Hybrid with Linear Pre-Fill and Extreme KV-Cache Compression}, 
+      author={Daniel Goldstein and Fares Obeid and Eric Alcaide and Guangyu Song and Eugene Cheah},
+      year={2024},
+      eprint={2407.12077},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2407.12077}, 
+}
+```
