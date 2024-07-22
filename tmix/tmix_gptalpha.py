@@ -6,6 +6,8 @@ from src.state import TimeMixState, Shared
 
 from src.rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 
+from src.CoreDependencies import *
+
 from configs import Transformer_Config
 def get_default_state(x:Tensor, config:Transformer_Config, requires_grad:bool):
     B, T, C = x.size()
@@ -19,6 +21,7 @@ class TMix_gptalpha(nn.Module):
     
     def __init__(self, args, layer_id):
         super().__init__()
+        MyLinear = get_quantized_linear(args.quant)
         self.args = args
         self.layer_id = layer_id
         self.n_layer = args.n_layer
@@ -42,10 +45,10 @@ class TMix_gptalpha(nn.Module):
             self.time_maa_w1 = nn.Parameter(torch.zeros(args.n_embd, D_MIX_LORA*3))
             self.time_maa_w2 = nn.Parameter(torch.zeros(3, D_MIX_LORA, args.n_embd).uniform_(-0.01, 0.01))
 
-        self.query = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        self.query = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.key = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.value = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.output = MyLinear(args.dim_att, args.n_embd, bias=False)
         self.ln_r = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
         self.ln_v = nn.LayerNorm(args.dim_att)

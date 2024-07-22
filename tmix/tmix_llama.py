@@ -8,11 +8,14 @@ from .kv_cache import get_default_state
 
 from src.rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 
+from src.CoreDependencies import *
+
 class TMix_llama(nn.Module):
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args, layer_id):
         super().__init__()
+        MyLinear = get_quantized_linear(args.quant)
         self.args = args
         self.layer_id = layer_id
         self.ctx_len = args.ctx_len
@@ -21,10 +24,10 @@ class TMix_llama(nn.Module):
         self.n_head = args.dim_att // self.head_size
         assert args.dim_att % self.n_head == 0
 
-        self.wq = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.wk = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.wv = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.wo = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        self.wq = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.wk = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.wv = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.wo = MyLinear(args.dim_att, args.n_embd, bias=False)
 
     def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
         B, L, D = x.size()

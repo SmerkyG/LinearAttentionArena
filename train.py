@@ -190,7 +190,7 @@ if __name__ == "__main__":
         for k in model.state_dict():
             if k not in load_keys:
                 load_dict[k] = model.state_dict()[k]
-    model.load_state_dict(load_dict)
+    model.load_state_dict(load_dict, strict = config.train.load_partial == 0)
 
     if trainer.global_rank == 0:
         for n in model.state_dict():
@@ -199,7 +199,7 @@ if __name__ == "__main__":
             if len(shape) > 1:
                 print(f"{str(shape[0]).ljust(5)} {str(shape[1]).ljust(5)} {n}")
             else:
-                print(f"{str(shape[0]).ljust(5)}       {n}")
+                print(f"{str(model.state_dict()[n].shape[0]).ljust(5)}       {n}")
 
     if "deepspeed" in config.train.strategy:
         trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = config.train.ds_bucket_mb * 1000 * 1000

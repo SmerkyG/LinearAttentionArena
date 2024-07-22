@@ -16,11 +16,14 @@ from configs import Transformer_Config
 
 from .tmix_rwkv_base import get_default_state
 
+from src.CoreDependencies import *
+
 class TMix_gold(nn.Module):
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
+        MyLinear = get_quantized_linear(args.quant)
         self.args = args
         self.layer_id = layer_id
         self.n_layer = args.n_layer
@@ -54,8 +57,8 @@ class TMix_gold(nn.Module):
             self.time_value_w1 = nn.Parameter(torch.zeros(args.n_embd, D_VALUE_LORA))
             self.time_value_w2 = nn.Parameter(torch.zeros(D_VALUE_LORA, args.dim_att).uniform_(-0.01, 0.01))
 
-        self.query = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        self.query = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.output = MyLinear(args.dim_att, args.n_embd, bias=False)
         self.ln_q = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
         self.ln_v = nn.LayerNorm(args.dim_att)

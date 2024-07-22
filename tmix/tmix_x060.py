@@ -6,11 +6,14 @@ from configs import Transformer_Config
 from src.state import TimeMixState, Shared
 from .tmix_rwkv_base import get_default_state
 
+from src.CoreDependencies import *
+
 class TMix_x060(nn.Module):   
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
+        MyLinear = get_quantized_linear(args.quant)
         self.args = args
         self.layer_id = layer_id
 
@@ -49,12 +52,12 @@ class TMix_x060(nn.Module):
                 tmp[n] = ratio_0_to_1 * (1 - (n / (args.dim_att - 1))) + zigzag
             self.time_faaaa = nn.Parameter(tmp.reshape(self.n_head, self.head_size))
 
-        self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.receptance = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.key = MyLinear(args.n_embd, args.dim_att, bias=False)
 
-        self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        self.value = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.gate = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.output = MyLinear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
 
     def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):

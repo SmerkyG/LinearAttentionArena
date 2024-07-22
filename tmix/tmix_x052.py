@@ -7,11 +7,14 @@ from src.state import TimeMixState, Shared
 from configs import Transformer_Config
 from .tmix_rwkv_base import get_default_state
 
+from src.CoreDependencies import *
+
 class TMix_x052(nn.Module):
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args:Transformer_Config, layer_id):
         super().__init__()
+        MyLinear = get_quantized_linear(args.quant)
         self.args = args
         self.layer_id = layer_id
 
@@ -48,12 +51,12 @@ class TMix_x052(nn.Module):
             self.time_faaaa = nn.Parameter(tmp.reshape(self.n_head, self.head_size))
 
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
-        self.receptance = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.key = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.receptance = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.key = MyLinear(args.n_embd, args.dim_att, bias=False)
 
-        self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
-        self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
+        self.value = MyLinear(args.n_embd, args.dim_att, bias=False)
+        self.output = MyLinear(args.dim_att, args.n_embd, bias=False)
+        self.gate = MyLinear(args.n_embd, args.dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att)
 
     def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
