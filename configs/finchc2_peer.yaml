@@ -1,0 +1,8 @@
+model:
+    __type__: configs.FinchC2_Config
+    tmix: x060c2
+    cmix: peer
+
+train:
+    micro_bsz: 16
+    accumulate_grad_batches: 4
