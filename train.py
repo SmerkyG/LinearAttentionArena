@@ -120,9 +120,6 @@ if __name__ == "__main__":
 
     assert config.train.data_type in ["utf-8", "utf-16le", "numpy", "binidx", "dummy", "uint16"]
 
-    if config.train.lr_final == 0 or config.train.lr_init == 0:
-        rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
-
     assert config.train.precision in ["32", "tf32", "16", "16-true", "16-mixed", "bf16", "bf16-true", "bf16-mixed"]
     os.environ["RWKV_FLOAT_MODE"] = config.train.precision
     if str(config.train.precision) == "32":
