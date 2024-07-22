@@ -89,6 +89,15 @@ see configs.py for specific configuration settings in dataclasses
 
 `model.inv_other_layer_ratio` is the ratio of second variety layers to all layers (e.g. 3 means 2/3 of the first variety and 1/3 of the second variety)
 
+Inherited from LinearAttentionArena, trainign is broken up into 'mini-batches' of 40320 samples, where a sample is the context length of the model.
+`magic_prime` is used to pseudo-randomize the location of these samples within the dataset, and is calculated as below from the LinearAttentionArena documentation:
+
+```
+magic_prime = the largest 3n+2 prime smaller than datalen/ctxlen-1 (= 1498226207/512-1 = 2926222.06 in this case) = 2926181 in this case
+
+use https://www.dcode.fr/prime-numbers-search
+```
+
 ## running it
 
 to create the starting initial state for a model run prepare.py with --train.train_stage 1:
