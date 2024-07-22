@@ -85,6 +85,9 @@ pipeline = PIPELINE(model, "rwkv_vocab_v20230424")
 
 eval_tasks = []
 eval_tasks += ['lambada_openai']
+
+#eval_tasks += ['lambada_openai','piqa','hellaswag','winogrande','arc_challenge','arc_easy','sciq']
+
 # eval_tasks += ['hellaswag','winogrande']
 # eval_tasks += ['lambada_openai','piqa','storycloze_2016','hellaswag','winogrande']
 # eval_tasks += ['arc_challenge','arc_easy','headqa','openbookqa','sciq']
@@ -92,6 +95,7 @@ eval_tasks += ['lambada_openai']
 # eval_tasks += ['triviaqa']
 # eval_tasks += ['coqa']
 
+#RWKV_PAD = []
 RWKV_PAD = pipeline.tokenizer.encode('\n') # we will use '\n' as PAD
 # RWKV_PAD = [0] # you can try using [0] as pad
 print('RWKV_PAD', RWKV_PAD)

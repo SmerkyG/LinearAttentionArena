@@ -62,6 +62,11 @@ if __name__ == "__main__":
 
     assert config.train.train_stage > 0
 
+    if config.train.lr2_init < 0:
+        config.train.lr2_init = config.train.lr_init
+    if config.train.lr2_final < 0:
+        config.train.lr2_final = config.train.lr_final
+
     EPOCH_SAMPLE_SIZE = 40320
     runtime_config.epoch_count = config.train.magic_prime // EPOCH_SAMPLE_SIZE
 
@@ -123,9 +128,6 @@ if __name__ == "__main__":
     rank_zero_info(str(vars(config)) + "\n")
 
     assert config.train.data_type in ["utf-8", "utf-16le", "numpy", "binidx", "dummy", "uint16"]
-
-    if config.train.lr_final == 0 or config.train.lr_init == 0:
-        rank_zero_info("\n\nNote: lr_final = 0 or lr_init = 0. Using linear LR schedule instead.\n\n")
 
     assert config.train.precision in ["32", "tf32", "16", "16-true", "16-mixed", "bf16", "bf16-true", "bf16-mixed"]
     os.environ["RWKV_FLOAT_MODE"] = config.train.precision
@@ -203,13 +205,48 @@ if __name__ == "__main__":
     rank_zero_info(f"########## Loading {config.train.load_model}... ##########")
     load_dict = torch.load(config.train.load_model, map_location="cpu")
 
+    second_model_sublayer_id = int(config.model.n_layer * (config.model.inv_other_layer_ratio - 1) / config.model.inv_other_layer_ratio)
     if config.train.load_partial == 1:
         load_keys = load_dict.keys()
         for k in model.state_dict():
             if k not in load_keys:
                 load_dict[k] = model.state_dict()[k]
-    model.load_state_dict(load_dict)
-
+        # # goco
+        # for k in load_keys:
+        #     dotsplit = k.split('.')
+        #     if '.ffn.' in k and len(dotsplit)>1 and int(dotsplit[1]) >= args.n_layer*2//3:
+        #         del load_dict[k]
+        del load_dict['ln_out.weight']
+        del load_dict['ln_out.bias']
+        del load_dict['head.weight']
+    model.load_state_dict(load_dict, strict=not config.train.load_partial)
+    if config.train.load_partial == 1:
+        model.emb.weight.requires_grad = False
+        model.head.weight.requires_grad = False
+        # goco
+        model.train(False) # so that the state doesn't get gradients
+        for i in range(second_model_sublayer_id,config.model.n_layer):
+            block = model.blocks[i]
+            block.train(True)
+        for i in range(second_model_sublayer_id):
+            block = model.blocks[i]
+            for n, p in block.named_parameters():
+                p.requires_grad = False
+            # if block.ln0 is not None:
+            #     block.ln0.weight.requires_grad = False
+            #     block.ln0.bias.requires_grad = False
+            # if block.ln1 is not None:
+            #     block.ln1.weight.requires_grad = False
+            #     block.ln1.bias.requires_grad = False
+            # if block.att is not None:
+            #     for n, p in block.att.named_parameters():
+            #         p.requires_grad = False
+            # if block.ln2 is not None:
+            #     block.ln2.weight.requires_grad = False
+            #     block.ln2.bias.requires_grad = False
+            # if block.ffn is not None:
+            #     for n, p in block.ffn.named_parameters():
+            #         p.requires_grad = False
     if trainer.global_rank == 0:
         for n in model.state_dict():
             shape = model.state_dict()[n].shape
