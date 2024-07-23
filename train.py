@@ -190,7 +190,7 @@ if __name__ == "__main__":
         for k in model.state_dict():
             if k not in load_keys:
                 load_dict[k] = model.state_dict()[k]
-    model.load_state_dict(load_dict)
+    model.load_state_dict(load_dict, strict = not config.train.load_partial)
 
     if trainer.global_rank == 0:
         for n in model.state_dict():

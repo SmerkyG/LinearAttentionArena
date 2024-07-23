@@ -130,7 +130,10 @@ class Block(nn.Module):
                 dx, channel_mix_state = self.ffn(ln2x, last_block_state.channel_mix_state)
 
                 if self.cmoe is not None:
-                    dx_moe = self.cmoe(ln2x, token_ids, last_block_state.channel_mix_state)
+                    dln2xprev = torch.concat((last_block_state.channel_mix_state.shift_state.unsqueeze(1), ln2x[:, :-1]), dim=1) - ln2x
+                    ln2x_tokenshifted = ln2x + dln2xprev * self.ffn.time_maa_k
+
+                    dx_moe = self.cmoe(ln2x_tokenshifted, token_ids, last_block_state.channel_mix_state)
                     dx = dx + dx_moe
 
                 x = self.drop0(x + dx)
@@ -407,7 +410,7 @@ class Transformer(nn.Module):
             else:
                 assert n.endswith('.weight') # should always be true
 
-                zero = [".att.output.", ".ffn.value.", ".ffn.receptance."]
+                zero = [".att.output.", ".ffn.value.", ".ffn.receptance.", ".ffn_value.", ".ffn_receptance."]
 
                 for kk in zero:
                     if kk in n:

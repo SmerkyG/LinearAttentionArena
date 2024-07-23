@@ -57,7 +57,7 @@ Please see the GoldFinch paper at https://arxiv.org/abs/2407.12077 for more deta
 ## setup
 
 ```
-pip install lightning==2.3.0 torch deepspeed==0.14.3 wandb ninja --upgrade
+pip install lightning==2.3.0 torch deepspeed==0.14.4 wandb ninja --upgrade
 ```
 
 you can download the minipile binidx via 

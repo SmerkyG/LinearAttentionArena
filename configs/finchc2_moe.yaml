@@ -2,6 +2,10 @@ model:
     __type__: configs.FinchC2_Config
     tmix: x060c2
     cmoe: a
-    num_experts: 2
-    ep_size: 1
-    dim_ffn: 768
+    num_experts: 4
+    ep_size: 4
+
+train:
+    devices: 4
+    micro_bsz: 16
+    
