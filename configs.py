@@ -16,6 +16,10 @@ class Model_Config:
     dropout:float = 0.0
     inv_other_layer_ratio:float = 3
     kv_cache_compression_ratio:float = 16
+    num_experts:int = 0
+    cmoe: str = ''
+    cmoe2: str = ''
+    ep_size: int = 1
 
 @dataclass(kw_only=True)
 class RoPE_Config:

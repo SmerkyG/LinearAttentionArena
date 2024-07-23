@@ -29,7 +29,12 @@ class Experts(nn.Module):
         chunks = inputs.chunk(self.num_local_experts, dim=1)
         expert_outputs: List[torch.Tensor] = []
 
-        for chunk, expert in zip(chunks, self.deepspeed_experts):
+        # stupidity to preserve compatibility with torch.jit
+        #for chunk, expert in zip(chunks, self.deepspeed_experts):
+        i = 0
+        for expert in self.deepspeed_experts:
+            chunk = chunks[i]
+            i += 1
             out = expert(chunk)
             if isinstance(out, tuple):
                 out = out[0]  # Ignore the bias term for now

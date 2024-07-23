@@ -28,6 +28,8 @@ from .CoreDependencies import *
 
 from src.logger import print0 as print
 
+from moe.utils import split_params_into_different_moe_groups_for_optimizer
+
 try:
     print('RWKV_MODEL_TYPE', os.environ["RWKV_MODEL_TYPE"])
 except:
@@ -59,32 +61,52 @@ class Block(nn.Module):
             # first layer type
             tmix = config.tmix
             cmix = config.cmix
+            cmoe = config.cmoe
         else:
             # second layer type
             tmix = config.tmix2
             cmix = config.cmix2       
+            cmoe = config.cmoe2
         
-        tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
-        tmix_factory = locate(tmix_typepath)
-        if tmix_factory is None:
-            print(f"Unsupported tmix model type: {tmix_typepath}")
-            exit(0)
+        if tmix == '':
+            tmix_factory = lambda config, layer_id: None
+        else:
+            tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
+            tmix_factory = locate(tmix_typepath)
+            if tmix_factory is None:
+                print(f"Unsupported tmix component type: {tmix_typepath}")
+                exit(0)
         tmix:nn.Module = tmix_factory(config, layer_id)
         
-        cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
-        cmix_factory = locate(cmix_typepath)
-        if cmix_factory is None:
-            print(f"Unsupported cmix model type: {cmix_typepath}")
-            exit(0)
+        if cmix == '':
+            cmix_factory = lambda config, layer_id: None
+        else:
+            cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
+            cmix_factory = locate(cmix_typepath)
+            if cmix_factory is None:
+                print(f"Unsupported cmix component type: {cmix_typepath}")
+                exit(0)
         cmix:nn.Module = cmix_factory(config, layer_id)
-       
+
+        if cmoe == '' or config.num_experts <= 0:
+            cmoe_factory = lambda config, layer_id: None
+        else:
+            cmoe_typepath = f'cmoe.cmoe_{cmoe}.CMoE_{cmoe}'
+            cmoe_factory = locate(cmoe_typepath)
+            if cmoe_factory is None:
+                print(f"Unsupported cmoe component type: {cmoe_typepath}")
+                exit(0)
+        cmoe:nn.Module = cmoe_factory(config, layer_id)
+
         self.is_cache_once = config.tmix2 == 'gold'
 
-        #self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
-        self.att = tmix
+        self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
+        self.att = TJIT(tmix)
         
-        #self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
-        self.ffn = cmix
+        self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        self.ffn = TJIT(cmix)
+
+        self.cmoe = cmoe
 
         if config.dropout > 0:
             self.drop0 = nn.Dropout(p = config.dropout)
@@ -94,7 +116,7 @@ class Block(nn.Module):
             self.drop1 = nn.Identity()
 
     @TCompile
-    def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
+    def forward(self, x, token_ids, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
         last_block_state:BlockState = last_model_state.block_states[self.layer_id]
 
         if not self.parallel:
@@ -104,7 +126,13 @@ class Block(nn.Module):
             else:
                 time_mix_state = last_block_state.time_mix_state
             if self.ln2 is not None and self.ffn is not None:
-                dx, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
+                ln2x = self.ln2(x)
+                dx, channel_mix_state = self.ffn(ln2x, last_block_state.channel_mix_state)
+
+                if self.cmoe is not None:
+                    dx_moe = self.cmoe(ln2x, token_ids, last_block_state.channel_mix_state)
+                    dx = dx + dx_moe
+
                 x = self.drop0(x + dx)
             else:
                 channel_mix_state = ChannelMixState()
@@ -152,12 +180,7 @@ class Transformer(nn.Module):
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
         blocks = [Block(config.model, i) for i in range(args.n_layer)]
-        self.default_time_mix_state_factories = []
-        self.default_channel_mix_state_factories = []
-        for block in blocks:
-            self.default_time_mix_state_factories.append(block.att.get_default_state_factory() if hasattr(block.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
-            self.default_channel_mix_state_factories.append(block.ffn.get_default_state_factory() if hasattr(block.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState())        
-        self.blocks = nn.ModuleList([TJIT(block) for block in blocks])
+        self.blocks = nn.ModuleList([block for block in blocks])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
@@ -182,26 +205,26 @@ class Transformer(nn.Module):
             x, next_block_state = block(*block_args)
         return x, next_block_state
 
-    def forward(self, idx:Tensor|list, last_model_state:ModelState|None = None):
+    def forward(self, token_ids:Tensor|list, last_model_state:ModelState|None = None):
         config : Transformer_Config = self.config.model
-        if isinstance(idx, Tensor):
-            B, T = idx.size()
+        if isinstance(token_ids, Tensor):
+            B, T = token_ids.size()
         else:
             B = 1
-            T = len(idx)
-            idx = torch.tensor(idx, device=self.emb.weight.device, dtype=torch.long, requires_grad=False)[None, :]
+            T = len(token_ids)
+            token_ids = torch.tensor(token_ids, device=self.emb.weight.device, dtype=torch.long, requires_grad=False)[None, :]
 
         shared = self.shared
         if config.rope is not None and shared.angles.size(0) == 0:
-            shared.angles = generate_rotary_embedding(config.ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale).to(idx.device)
+            shared.angles = generate_rotary_embedding(config.ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale).to(token_ids.device)
         elif config.brope is not None and shared.angles.size(0) == 0:
-            shared.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size, config.brope.rescale).to(idx.device)
+            shared.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size, config.brope.rescale).to(token_ids.device)
         elif config.alibi is not None and self.bias_mask.size(0) == 0:
-            shared.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head).to(idx.device)
+            shared.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head).to(token_ids.device)
 
         assert (shared.angles.size(0) == 0 or T <= shared.angles.size(0)) or (shared.bias_mask.size(0) == 0 or T <= shared.bias_mask.size(0))
 
-        x = self.emb(idx)
+        x = self.emb(token_ids)
 
         total_n_layer = config.n_layer
 
@@ -212,11 +235,11 @@ class Transformer(nn.Module):
             for layer_id in range(total_n_layer):
                 block = self.blocks[layer_id]
                 last_model_state.block_states.append(BlockState(
-                    self.default_time_mix_state_factories[layer_id](x, config, requires_grad),
-                    self.default_channel_mix_state_factories[layer_id](x, config, requires_grad),
+                    block.default_time_mix_state_factory(x, config, requires_grad),
+                    block.default_channel_mix_state_factory(x, config, requires_grad),
                 ))
             if self.is_cache_once:
-                last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
+                last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=token_ids.device, requires_grad=False)
                 last_model_state.k_cache = torch.zeros([B, 0, config.dim_att], dtype=x.dtype, device=x.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
@@ -230,13 +253,13 @@ class Transformer(nn.Module):
                 self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
                 x
             ], dim=-2)
-            next_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, idx], dim=-1)
+            next_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, token_ids], dim=-1)
         else:
             x_original_from_input_cache = torch.tensor([])
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
-            x, next_block_state = self.ckpt(block, x, x_original_from_input_cache, k_cache, last_model_state, shared)
+            x, next_block_state = self.ckpt(block, x, token_ids, x_original_from_input_cache, k_cache, last_model_state, shared)
             if self.is_cache_once and layer_id == get_second_submodel_layer_id(config) - 1:
                 compressed_k_cache_chunk = self.w_kv_cache_a(x)
                 k_tokencat_chunk = torch.cat([x_original_chunk, compressed_k_cache_chunk],dim=-1)
@@ -312,6 +335,9 @@ class Transformer(nn.Module):
             optim_groups += [{"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0, 'name':'lr_3x'}]
         if len(lr_decay) > 0:
             optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": train_config.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
+
+        if self.config.model.num_experts > 1:
+            optim_groups = split_params_into_different_moe_groups_for_optimizer(optim_groups)
 
         return optim_groups
 

@@ -3,18 +3,32 @@
 
 # DeepSpeed Team
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 
 import torch
-from torch import nn
-from torch.nn import functional as F
+from torch import nn, Tensor
+from torch.nn import Module, functional as F
 
 from deepspeed.utils import groups, log_dist
 from .experts import Experts
 from .sharded_moe import MOELayer, TopKGate
 
+from deepspeed.moe.layer import MoE as DeepSpeedMoE
 
-class MoE(nn.Module):
+from src.CoreDependencies import *
+
+class Identity(Module):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__()
+
+    def forward(self, input: Tensor) -> Tensor:
+        return input
+
+    def _set_ep_group(self, ep_group):
+        pass
+
+# superclass to fool the rest of DeepSpeed into thinking this is their MoE class, so it initializes/loads/saves properly when it checks module instance types
+class MoE(DeepSpeedMoE):
     """Initialize an MoE layer.
 
     Arguments:
@@ -32,7 +46,6 @@ class MoE(nn.Module):
         use_rts (bool, optional): default=True, whether to use Random Token Selection.
         use_tutel (bool, optional): default=False, whether to use Tutel optimizations (if installed).
         enable_expert_tensor_parallelism (bool, optional): default=False, whether to use tensor parallelism for experts
-        top2_2nd_expert_sampling (bool, optional): default=True, whether to perform sampling for 2nd expert
     """
 
     def __init__(self,
@@ -49,10 +62,11 @@ class MoE(nn.Module):
                  drop_tokens: bool = True,
                  use_rts: bool = True,
                  use_tutel: bool = False,
+                 hash_prime: int = 1,
                  enable_expert_tensor_parallelism: bool = False,
                  top2_2nd_expert_sampling: bool = True) -> None:
 
-        super(MoE, self).__init__()
+        super(DeepSpeedMoE, self).__init__()
 
         self.use_residual = use_residual
         self.enable_expert_tensor_parallelism = enable_expert_tensor_parallelism
@@ -69,19 +83,24 @@ class MoE(nn.Module):
         assert noisy_gate_policy is None or noisy_gate_policy in ['None', 'Jitter', 'RSample'], \
             'Unsupported noisy_gate_policy: ' + noisy_gate_policy
 
-        experts = Experts(expert, self.num_local_experts, self.expert_group_name)
-        self.deepspeed_moe = MOELayer(TopKGate(hidden_size, num_experts, k, capacity_factor, eval_capacity_factor,
-                                               min_capacity, noisy_gate_policy, drop_tokens, use_rts, None,
-                                               top2_2nd_expert_sampling),
+        experts = TJIT(Experts(expert, self.num_local_experts, self.expert_group_name))
+        # self.deepspeed_moe = MOELayer(TopKGate(hidden_size, num_experts, k, capacity_factor, eval_capacity_factor,
+        #                                        min_capacity, noisy_gate_policy, drop_tokens, use_rts, None,
+        #                                        top2_2nd_expert_sampling),
+        self.deepspeed_moe = MOELayer(None,
                                       experts,
                                       self.expert_group_name,
                                       self.ep_size,
                                       self.num_local_experts,
+                                      hash_prime=hash_prime,
                                       use_tutel=use_tutel)
         if self.use_residual:
             self.mlp = expert
             # coefficient is used for weighted sum of the output of expert and mlp
             self.coefficient = nn.Linear(hidden_size, 2)
+        else:
+            self.mlp = Identity()
+            self.coefficient = Identity()
 
     def set_deepspeed_parallelism(self, use_data_before_expert_parallel_: bool = False) -> None:
         self._create_process_groups(use_data_before_expert_parallel_=use_data_before_expert_parallel_)
@@ -102,9 +121,11 @@ class MoE(nn.Module):
         # Set the group handle for the MOELayer (deepspeed_moe) object
         self.deepspeed_moe._set_ep_group(groups._get_expert_parallel_group(self.expert_group_name))
 
+    @torch.jit.ignore
     def forward(self,
                 hidden_states: torch.Tensor,
-                used_token: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                tokens: torch.Tensor,
+                used_token: torch.Tensor) -> torch.Tensor: #Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """ MoE forward
 
         Arguments:
@@ -120,7 +141,7 @@ class MoE(nn.Module):
 
             * exp_counts (Tensor): expert count
         """
-        output = self.deepspeed_moe(hidden_states, used_token)
+        output = self.deepspeed_moe(hidden_states, tokens, used_token)
         if self.use_residual:
             # Residual MoE
             output_mlp = self.mlp(hidden_states)
@@ -129,4 +150,5 @@ class MoE(nn.Module):
             coef = self.coefficient(hidden_states)
             coef = F.softmax(coef, dim=-1)
             output = output * coef[..., 0:1] + output_mlp * coef[..., 1:]
-        return output, self.deepspeed_moe.l_aux, self.deepspeed_moe.exp_counts
+        return output
+        #return output, self.deepspeed_moe.l_aux, self.deepspeed_moe.exp_counts

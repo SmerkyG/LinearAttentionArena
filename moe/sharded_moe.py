@@ -27,6 +27,8 @@ import torch.nn.functional as F
 from deepspeed.utils import groups
 from .mappings import drop_tokens, gather_tokens
 
+import math
+
 if TYPE_CHECKING:
     Base = Module[Tensor]
 else:
@@ -107,7 +109,6 @@ class _AllToAll(torch.autograd.Function):
     def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor]:
         return (None, _AllToAll.apply(ctx.group, *grad_output))
 
-
 # einsum rewrites are on par or more performant
 # switch can be bubbled up in future
 USE_EINSUM = True
@@ -155,7 +156,7 @@ def einsum(rule, a, b):
 # includes stateful caching logic which is incompatible with ONNX.
 
 
-@torch.jit.script
+#@torch.jit.script
 def _capacity(gates: Tensor, capacity_factor: Tensor, min_capacity: Tensor) -> Tensor:
     # gates has shape of SE
     num_tokens = gates.shape[0]
@@ -168,12 +169,12 @@ def _capacity(gates: Tensor, capacity_factor: Tensor, min_capacity: Tensor) -> T
     return capacity
 
 
-@torch.jit.script
+#@torch.jit.script
 def _top_idx(source, k):
     return torch.topk(source, k=k, dim=0)[1]
 
 
-@torch.jit.script
+#@torch.jit.script
 def _one_hot_to_float(x, num_classes):
     return F.one_hot(x, num_classes=num_classes).float()
 
@@ -181,7 +182,7 @@ def _one_hot_to_float(x, num_classes):
 def top1gating(logits: Tensor,
                capacity_factor: float,
                min_capacity: int,
-               used_token: Tensor = None,
+               used_token: Tensor,
                noisy_gate_policy: Optional[str] = None,
                drop_tokens: bool = True,
                use_rts: bool = True,
@@ -275,7 +276,8 @@ def top1gating(logits: Tensor,
 
     # Normalize gate probabilities
     mask1_float = mask1.float()
-    gates = gates * mask1_float
+    # FIXME - this appears to be a bug as implemented in deepspeed, so we forced it to normalize the probabilities to 1.0
+    gates = gates.bool().float() * mask1_float
 
     locations1_sc = _one_hot_to_float(locations1_s, capacity)
     combine_weights = einsum("se,sc->sec", gates, locations1_sc)
@@ -301,8 +303,8 @@ def top2gating(logits: Tensor,
     mask1 = F.one_hot(indices1_s, num_classes=num_experts)
 
     if top2_2nd_expert_sampling:
-        # Create a mask for 2nd's expert per token using Gumbel-max trick
-        # https://timvieira.github.io/blog/post/2014/07/31/gumbel-max-trick/
+    # Create a mask for 2nd's expert per token using Gumbel-max trick
+    # https://timvieira.github.io/blog/post/2014/07/31/gumbel-max-trick/
         logits += gumbel_rsample(logits.shape, device=logits.device)
 
     # Replace top-expert with min value
@@ -368,6 +370,103 @@ def top2gating(logits: Tensor,
 
     return l_aux, combine_weights, dispatch_mask, exp_counts.detach().to('cpu')
 
+# class HashGate(Module):
+#     def __init__(self,
+#                  model_dim: int,
+#                  num_experts: int,
+#                  k: int = 1,
+#                  capacity_factor: float = 1.0,
+#                  eval_capacity_factor: float = 1.0,
+#                  min_capacity: int = 8,
+#                  noisy_gate_policy: Optional[str] = None,
+#                  drop_tokens: bool = True,
+#                  use_rts: bool = True) -> None:
+#         super().__init__()
+
+#         # Only top-1 and top-2 are supported at the moment.
+#         if k != 1:# and k != 2:
+#             raise ValueError('Only top-1 and top-2 gatings are supported.')
+#         self.k = k
+#         self.capacity_factor = capacity_factor
+#         self.eval_capacity_factor = eval_capacity_factor
+#         self.min_capacity = min_capacity
+#         self.noisy_gate_policy = noisy_gate_policy
+#         self.timers = SynchronizedWallClockTimer()
+#         self.wall_clock_breakdown = False
+#         self.gate_time = 0.0
+#         self.drop_tokens = drop_tokens
+#         self.use_rts = use_rts
+
+#     def forward(self,
+#                 input: torch.Tensor,
+#                 used_token: Optional[torch.Tensor] = None,
+#                 use_tutel: bool = False) -> Tuple[Tensor, Tensor, Tensor]:  # type: ignore
+        
+#         capacity_factor = self.capacity_factor
+#         min_capacity = self.min_capacity
+#         num_experts = self.num_experts
+
+#         # expert index per token
+#         indices1_s = input_tokens % num_experts
+
+#         # Create a mask for 1st's expert per token
+#         mask1 = F.one_hot(indices1_s, num_classes=num_experts)
+
+#         # just calculates capacity based on n_input_tokens and n_experts
+#         capacity = _capacity(mask1, torch.tensor(capacity_factor), torch.tensor(min_capacity))
+
+#         # mask only used tokens
+#         if used_token is not None:
+#             mask1 = einsum("s,se->se", used_token, mask1)
+
+#         # gating decisions
+#         #exp_counts = torch.sum(mask1, dim=0).detach().to('cpu')
+#         exp_counts = None
+
+#         # if we don't want to drop any tokens
+#         if not drop_tokens:
+#             new_capacity = torch.max(torch.sum(mask1, dim=0))
+#             dist.all_reduce(new_capacity, op=dist.ReduceOp.MAX, group=dist.get_world_group())
+#             capacity = new_capacity
+
+#         l_aux = None
+
+#         # Random Token Selection
+#         if use_rts:
+#             uniform = exp_selection_uniform_map.get(logits.device)
+#             if uniform is None:
+#                 uniform = torch.distributions.uniform.Uniform(low=torch.tensor(0.0, device=logits.device),
+#                                                             high=torch.tensor(1.0, device=logits.device)).rsample
+#                 exp_selection_uniform_map[logits.device] = uniform
+
+#             mask1_rand = mask1 * uniform(mask1.shape)
+#         else:
+#             mask1_rand = mask1
+
+#         assert logits.shape[
+#             0] >= min_capacity, "No. of tokens (batch-size) should be greater than min_capacity. Either set min_capacity to 0 or increase your batch size."
+
+#         top_idx = _top_idx(mask1_rand, capacity)
+
+#         new_mask1 = mask1 * torch.zeros_like(mask1).scatter_(0, top_idx, 1)
+#         mask1 = new_mask1
+
+#         # Store the capacity location for each token
+#         locations1_s = torch.sum(locations1 * mask1, dim=1)
+
+#         locations1_sc = _one_hot_to_float(locations1_s, capacity)
+#         combine_weights = einsum("se,sc->sec", gates, locations1_sc)
+
+#         dispatch_mask = combine_weights.bool()
+
+#         return l_aux, combine_weights, dispatch_mask, exp_counts
+
+            
+#             gate_output = top1gating(logits, self.capacity_factor if self.training else self.eval_capacity_factor,
+#                                      self.min_capacity, used_token, self.noisy_gate_policy if self.training else None,
+#                                      self.drop_tokens, self.use_rts, use_tutel)
+#             return gate_output
+
 
 class TopKGate(Module):
     """Gate module which implements Top2Gating as described in Gshard_.
@@ -424,7 +523,7 @@ class TopKGate(Module):
 
     def forward(self,
                 input: torch.Tensor,
-                used_token: torch.Tensor = None,
+                used_token: torch.Tensor,
                 use_tutel: bool = False) -> Tuple[Tensor, Tensor, Tensor]:  # type: ignore
 
         if self.wall_clock_breakdown:
@@ -453,6 +552,133 @@ class TopKGate(Module):
 
 
 class MOELayer(Base):
+    """MOELayer module which implements MixtureOfExperts as described in Gshard_.
+    ::
+
+        gate = TopKGate(model_dim, num_experts)
+        moe = MOELayer(gate, expert)
+        output = moe(input)
+        l_aux = moe.l_aux
+
+    .. Gshard_: https://arxiv.org/pdf/2006.16668.pdf
+
+    Args:
+        gate (torch.nn.Module):
+            gate network
+        expert (torch.nn.Module):
+            expert network
+    """
+
+    def __init__(self,
+                 gate: Optional[Module],
+                 experts: Module,
+                 ep_group_name,
+                 ep_size,
+                 num_local_experts: int,
+                 hash_prime: int,
+                 use_tutel: bool = False) -> None:
+        super().__init__()
+        self.gate = gate
+        self.experts = experts
+        self.ep_group = None
+        self.ep_size = ep_size
+        self.ep_group_name = ep_group_name
+        self.num_local_experts = num_local_experts
+        self.hash_prime = hash_prime
+        self.time_falltoall = 0.0
+        self.time_salltoall = 0.0
+        self.time_moe = 0.0
+        self.timers = SynchronizedWallClockTimer()
+        self.wall_clock_breakdown = False
+
+        self.use_tutel = use_tutel and TUTEL_INSTALLED and gate.k == 1
+
+        if self.use_tutel:
+            logger.info('Using Tutel optimizations.')
+        elif use_tutel and not TUTEL_INSTALLED:
+            logger.warning("Tutel optimization requested but not installed. "
+                           "Proceeding without Tutel.")
+        elif use_tutel and TUTEL_INSTALLED and gate.k != 1:
+            logger.warning("To enable Tutel optimization, use top-1 instead of top-2 gate. "
+                           "Proceeding without Tutel.")
+
+    def _set_ep_group(self, ep_group):
+        self.ep_group = ep_group
+        if self.gate is not None:
+            self.gate._set_ep_group(ep_group)
+
+    @torch._dynamo.disable
+    @torch.jit.ignore
+    def all_to_all(self, x:Tensor) -> Tensor:
+        return _AllToAll.apply(self.ep_group, x)
+    #def all_to_all(self, x:Tensor, output_split_sizes:list|None=None, input_split_sizes:list|None=None) -> Tensor:
+    #    return _AllToAll.apply(self.ep_group, x, output_split_sizes, input_split_sizes)
+
+    def forward(self, input, tokens, used_token) -> Tensor: #, **kwargs: Any) -> Tensor:
+
+        d_model = input.shape[-1]
+
+        # FIXME
+        n_experts = self.ep_size * self.num_local_experts
+
+        flat_tokens = tokens.reshape(-1)
+        expert_by_flat_idx = (flat_tokens * self.hash_prime) % n_experts
+
+        use_capacity = True
+
+        if use_capacity:
+            n_tokens = flat_tokens.size(0)
+            capacity_factor = 1.0
+            capacity = int(math.ceil((n_tokens / n_experts) * capacity_factor))
+
+            # one-hot expert per flat token location
+            flat_one_hot_by_expert = torch.nn.functional.one_hot(expert_by_flat_idx, n_experts).mT
+            # indices that reorder the inputs to be in per expert order - ones represent experts and come first, then zeros represent unused locations for a given expert
+            mask_by_expert, flat_idx_by_expert = torch.sort(flat_one_hot_by_expert, descending=True)
+            # FIXME - add expert capacity location randomization
+            # cut off everything past capacity
+            flat_idx_by_flat_expert = flat_idx_by_expert[:, :capacity].contiguous().view(-1, 1)
+            # also use cut off mask of sorted one-hots so we get 1.0 for flat token locations were used by a given expert and 0.0 for others
+            mask_by_flat_expert = mask_by_expert[:, :capacity].contiguous().view(-1, 1)
+            # Reshape indices to be compatible with Tensor.gather (bc no broadcasting allowed?)
+            flat_idx_by_flat_expert = flat_idx_by_flat_expert.expand(-1, d_model)
+
+            # permute the tokens locally so that they are grouped by their expert assignment
+            flat_input = input.reshape(-1, d_model)
+            flat_input_by_flat_expert = torch.gather(flat_input, 0, flat_idx_by_flat_expert)
+
+            if self.ep_size == 1:
+                flat_output_from_all = self.experts(flat_input_by_flat_expert.unsqueeze(0)).squeeze(0)
+            else:
+                flat_input_for_my_experts_from_all = self.all_to_all(flat_input_by_flat_expert)
+                flat_output_for_my_experts = self.experts(flat_input_for_my_experts_from_all)
+                flat_output_from_all = self.all_to_all(flat_output_for_my_experts)
+
+            # force tokens which exceeded capacity to become zero as output
+            # scatter additively, first multiplying by mask so over-capacity entries end up being zero and others are whatever their index held, since they're uniquely identified
+            flat_output = torch.zeros_like(flat_output_from_all).scatter_add(dim=0, index=flat_idx_by_flat_expert, src=flat_output_from_all * mask_by_flat_expert)
+
+        else:
+            
+            # indices that reorder the inputs to be in per expert order
+            flat_idx_sorted_by_expert = torch.argsort(expert_by_flat_idx, dim=0)
+            # Reshape indices to be compatible with Tensor.gather (bc no broadcasting allowed?)
+            flat_idx_sorted_by_expert_unsqueezed = flat_idx_sorted_by_expert.view(-1, 1).expand(-1, d_model)
+            # Stage2: permute the tokens locally so that they are grouped by their expert assignment
+            flat_input = input.reshape(-1, d_model)
+            flat_input_in_expert_order = torch.gather(flat_input, 0, flat_idx_sorted_by_expert_unsqueezed)
+
+            if self.ep_size == 1:
+                flat_output_from_all = self.experts(flat_input_in_expert_order.unsqueeze(0)).squeeze(0)
+            else:
+                flat_input_for_my_experts_from_all = self.all_to_all(flat_input_in_expert_order)
+                flat_output_for_my_experts = self.experts(flat_input_for_my_experts_from_all)
+                flat_output_from_all = self.all_to_all(flat_output_for_my_experts)
+
+            flat_output = torch.zeros_like(flat_input).scatter(dim=0, index=flat_idx_sorted_by_expert_unsqueezed, src=flat_output_from_all)            
+
+        return flat_output.view(input.shape)
+class MOELayerOG(Base):
     """MOELayer module which implements MixtureOfExperts as described in Gshard_.
     ::
 
@@ -505,7 +731,7 @@ class MOELayer(Base):
         self.ep_group = ep_group
         self.gate._set_ep_group(ep_group)
 
-    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+    def forward(self, *input: Tensor) -> Tensor: #, **kwargs: Any) -> Tensor:
 
         if self.wall_clock_breakdown:
             self.timers(MOE_TIMER).start()
