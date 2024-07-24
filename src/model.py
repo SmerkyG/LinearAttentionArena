@@ -103,7 +103,12 @@ class Block(nn.Module):
         self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
         self.att = TJIT(tmix)
         
-        self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        if cmix is not None:
+            self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        elif cmoe is not None:
+            self.default_channel_mix_state_factory = cmoe.get_default_state_factory() if hasattr(cmoe, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        else:
+            self.default_channel_mix_state_factory = lambda x, c, r: ChannelMixState()
         self.ffn = TJIT(cmix)
 
         self.cmoe = cmoe
@@ -125,20 +130,17 @@ class Block(nn.Module):
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
-            if self.ln2 is not None and self.ffn is not None:
-                ln2x = self.ln2(x)
-                dx, channel_mix_state = self.ffn(ln2x, last_block_state.channel_mix_state)
-
-                if self.cmoe is not None:
-                    dln2xprev = torch.concat((last_block_state.channel_mix_state.shift_state.unsqueeze(1), ln2x[:, :-1]), dim=1) - ln2x
-                    ln2x_tokenshifted = ln2x + dln2xprev * self.ffn.time_maa_k
-
-                    dx_moe = self.cmoe(ln2x_tokenshifted, token_ids, last_block_state.channel_mix_state)
-                    dx = dx + dx_moe
-
-                x = self.drop0(x + dx)
-            else:
+            ln2x = self.ln2(x)
+            if self.ffn is not None:
+                dffn_x, channel_mix_state = self.ffn(ln2x, last_block_state.channel_mix_state)
+                x = x + dffn_x
+            if self.cmoe is not None:
+                dcmoe_x, channel_mix_state = self.cmoe(ln2x, token_ids, last_block_state.channel_mix_state)
+                x = x + dcmoe_x
+            if self.ffn is None and self.cmoe is None:
                 channel_mix_state = ChannelMixState()
+            
+            x = self.drop0(x)
         else:
             # parallel
             dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)

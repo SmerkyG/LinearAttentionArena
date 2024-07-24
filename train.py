@@ -192,9 +192,21 @@ if __name__ == "__main__":
 
     if config.train.load_partial == 1:
         load_keys = load_dict.keys()
+
+        if config.model.num_experts > 0 and 'blocks.0.cmoe.moe.deepspeed_moe.gate.wg.weight' not in load_keys:
+            for i in range(config.model.n_layer):
+                load_dict[f'blocks.{i}.cmoe.time_maa_k'] = load_dict[f'blocks.{i}.ffn.time_maa_k']
+                load_dict[f'blocks.{i}.cmoe.time_maa_r'] = load_dict[f'blocks.{i}.ffn.time_maa_r']
+                if config.model.cmix == '':
+                    for e in range(config.model.num_experts):
+                        load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_key.weight'] = load_dict[f'blocks.{i}.ffn.key.weight']
+                        load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_value.weight'] = load_dict[f'blocks.{i}.ffn.value.weight']
+                        load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_receptance.weight'] = load_dict[f'blocks.{i}.ffn.receptance.weight']
+
         for k in model.state_dict():
             if k not in load_keys:
                 load_dict[k] = model.state_dict()[k]
+
     model.load_state_dict(load_dict, strict = not config.train.load_partial)
 
     if trainer.global_rank == 0:
