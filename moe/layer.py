@@ -32,7 +32,7 @@ class MoE(DeepSpeedMoE):
     """Initialize an MoE layer.
 
     Arguments:
-        hidden_size (int): the hidden dimension of the model, importantly this is also the input and output dimension.
+        input_size (int): the input dimension.
         expert (nn.Module): the torch module that defines the expert (e.g., MLP, torch.linear).
         num_experts (int, optional): default=1, the total number of experts per layer.
         ep_size (int, optional): default=1, number of ranks in the expert parallel world or group.
@@ -49,7 +49,7 @@ class MoE(DeepSpeedMoE):
     """
 
     def __init__(self,
-                 hidden_size: int,
+                 input_size: int,
                  expert: nn.Module,
                  num_experts: int = 1,
                  ep_size: int = 1,
@@ -84,7 +84,7 @@ class MoE(DeepSpeedMoE):
             'Unsupported noisy_gate_policy: ' + noisy_gate_policy
 
         experts = TJIT(Experts(expert, self.num_local_experts, self.expert_group_name))
-        # self.deepspeed_moe = MOELayer(TopKGate(hidden_size, num_experts, k, capacity_factor, eval_capacity_factor,
+        # self.deepspeed_moe = MOELayer(TopKGate(input_size, num_experts, k, capacity_factor, eval_capacity_factor,
         #                                        min_capacity, noisy_gate_policy, drop_tokens, use_rts, None,
         #                                        top2_2nd_expert_sampling),
         self.deepspeed_moe = MOELayer(None,
@@ -97,7 +97,7 @@ class MoE(DeepSpeedMoE):
         if self.use_residual:
             self.mlp = expert
             # coefficient is used for weighted sum of the output of expert and mlp
-            self.coefficient = nn.Linear(hidden_size, 2)
+            self.coefficient = nn.Linear(input_size, 2)
         else:
             self.mlp = Identity()
             self.coefficient = Identity()

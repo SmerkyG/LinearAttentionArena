@@ -616,7 +616,7 @@ class MOELayer(Base):
 
     def forward(self, input, tokens, used_token) -> Tensor: #, **kwargs: Any) -> Tensor:
 
-        d_model = input.shape[-1]
+        d_input = input.shape[-1]
 
         # FIXME
         n_experts = self.ep_size * self.num_local_experts
@@ -640,12 +640,10 @@ class MOELayer(Base):
             flat_idx_by_flat_expert = flat_idx_by_expert[:, :capacity].contiguous().view(-1, 1)
             # also use cut off mask of sorted one-hots so we get 1.0 for flat token locations were used by a given expert and 0.0 for others
             mask_by_flat_expert = mask_by_expert[:, :capacity].contiguous().view(-1, 1)
-            # Reshape indices to be compatible with Tensor.gather (bc no broadcasting allowed?)
-            flat_idx_by_flat_expert = flat_idx_by_flat_expert.expand(-1, d_model)
 
             # permute the tokens locally so that they are grouped by their expert assignment
-            flat_input = input.reshape(-1, d_model)
-            flat_input_by_flat_expert = torch.gather(flat_input, 0, flat_idx_by_flat_expert)
+            flat_input = input.reshape(-1, d_input)
+            flat_input_by_flat_expert = torch.gather(flat_input, 0, flat_idx_by_flat_expert.view(-1, 1).expand(-1, d_input))
 
             if self.ep_size == 1:
                 flat_output_from_all = self.experts(flat_input_by_flat_expert.unsqueeze(0)).squeeze(0)
@@ -656,17 +654,16 @@ class MOELayer(Base):
 
             # force tokens which exceeded capacity to become zero as output
             # scatter additively, first multiplying by mask so over-capacity entries end up being zero and others are whatever their index held, since they're uniquely identified
-            flat_output = torch.zeros_like(flat_output_from_all).scatter_add(dim=0, index=flat_idx_by_flat_expert, src=flat_output_from_all * mask_by_flat_expert)
+            d_output = flat_output_from_all.size(-1)
+            flat_output = torch.zeros_like(flat_output_from_all).scatter_add(dim=0, index=flat_idx_by_flat_expert.view(-1, 1).expand(-1, d_output), src=flat_output_from_all * mask_by_flat_expert)
 
         else:
             
             # indices that reorder the inputs to be in per expert order
             flat_idx_sorted_by_expert = torch.argsort(expert_by_flat_idx, dim=0)
-            # Reshape indices to be compatible with Tensor.gather (bc no broadcasting allowed?)
-            flat_idx_sorted_by_expert_unsqueezed = flat_idx_sorted_by_expert.view(-1, 1).expand(-1, d_model)
             # Stage2: permute the tokens locally so that they are grouped by their expert assignment
-            flat_input = input.reshape(-1, d_model)
-            flat_input_in_expert_order = torch.gather(flat_input, 0, flat_idx_sorted_by_expert_unsqueezed)
+            flat_input = input.reshape(-1, d_input)
+            flat_input_in_expert_order = torch.gather(flat_input, 0, flat_idx_sorted_by_expert.view(-1, 1).expand(-1, d_input))
 
             if self.ep_size == 1:
                 flat_output_from_all = self.experts(flat_input_in_expert_order.unsqueeze(0)).squeeze(0)
@@ -674,10 +671,12 @@ class MOELayer(Base):
                 flat_input_for_my_experts_from_all = self.all_to_all(flat_input_in_expert_order)
                 flat_output_for_my_experts = self.experts(flat_input_for_my_experts_from_all)
                 flat_output_from_all = self.all_to_all(flat_output_for_my_experts)
+                
+            d_output = flat_output_from_all.size(-1)
+            flat_output = torch.zeros_like(flat_output_from_all).scatter(dim=0, index=flat_idx_sorted_by_expert.view(-1, 1).expand(-1, d_output), src=flat_output_from_all)            
 
-            flat_output = torch.zeros_like(flat_input).scatter(dim=0, index=flat_idx_sorted_by_expert_unsqueezed, src=flat_output_from_all)            
-
-        return flat_output.view(input.shape)
+        return flat_output.view(input.size(0), input.size(1), d_output)
+    
 class MOELayerOG(Base):
     """MOELayer module which implements MixtureOfExperts as described in Gshard_.
     ::
