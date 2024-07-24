@@ -291,10 +291,12 @@ class Transformer(nn.Module):
         for n, p in self.named_parameters():
             if not p.requires_grad:
                 continue
-            if train_config.load_partial and self.is_cache_once and ('.att.' in n or '.ffn.' in n) and int(n.split('.')[1]) >= get_second_submodel_layer_id(self.config.model):
-                lr2.add(n)
+            #if train_config.load_partial and self.is_cache_once and ('.att.' in n or '.ffn.' in n) and int(n.split('.')[1]) >= get_second_submodel_layer_id(self.config.model):
+            #    lr2.add(n)
             # elif self.is_cache_once and ('ln_out.' in n or 'head.' in n):
             #     lr2.add(n)
+            if train_config.load_partial and '.cmoe.' in n:
+                lr2.add(n)
             elif (("_w1" in n) or ("_w2" in n)) and (train_config.layerwise_lr > 0):
                 lr_1x.add(n)
             elif (("time_mix" in n) or ("time_maa" in n)) and (train_config.layerwise_lr > 0):
@@ -322,9 +324,9 @@ class Transformer(nn.Module):
                 lr_1x.add(n)
 
         param_dict = {n: p for n, p in self.named_parameters()}
+        param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x) + list(lr2)
         if not train_config.load_partial:
             assert sorted(param_dict) == sorted(param_check)
-        param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x) + list(lr2)
 
         lr_decay = sorted(list(lr_decay))
         lr_1x = sorted(list(lr_1x))
