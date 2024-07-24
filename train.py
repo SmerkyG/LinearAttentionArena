@@ -58,6 +58,11 @@ if __name__ == "__main__":
 
     assert config.train.train_stage > 0
 
+    if config.train.lr2_init < 0:
+        config.train.lr2_init = config.train.lr_init
+    if config.train.lr2_final < 0:
+        config.train.lr2_final = config.train.lr_final
+
     EPOCH_SAMPLE_SIZE = 40320
     runtime_config.epoch_count = config.train.magic_prime // EPOCH_SAMPLE_SIZE
 

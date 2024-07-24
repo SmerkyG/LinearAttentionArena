@@ -76,8 +76,12 @@ class Train_Config:
 
     lr_decay_type:str = 'cos'
     lr_wait:float = 0.0
+    chunk_len:int = 0
+
     lr_init:float = 6e-4
     lr_final:float = 1e-5
+    lr2_init:float = -1
+    lr2_final:float = -1
     warmup_steps:int = -1
     beta1:float = 0.9
     beta2:float = 0.99
