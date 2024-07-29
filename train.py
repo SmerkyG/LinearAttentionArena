@@ -75,6 +75,9 @@ if __name__ == "__main__":
                         p = int(p)
                     list_p += [p]
         list_p.sort()
+        if len(list_p) == 0:
+            print(f"No correctly named rwkv-*.pth file found in {config.runtime.proj_path}")
+            exit(-1)
         max_p = list_p[-1]
         if len(list_p) > 1:
             runtime_config.my_pile_prev_p = list_p[-2]  # in case max_p is corrupted
@@ -170,7 +173,7 @@ if __name__ == "__main__":
                         gradient_clip_val=config.train.gradient_clip_val, 
                         val_check_interval=config.train.val_check_interval)
 
-    with trainer.init_module(empty_init=True):
+    with trainer.init_module(empty_init=not config.train.load_partial):
         model = Transformer(config)
         wrapper = LightningModelWrapper(model, config)
 
@@ -190,8 +193,7 @@ if __name__ == "__main__":
         for k in model.state_dict():
             if k not in load_keys:
                 load_dict[k] = model.state_dict()[k]
-    model.load_state_dict(load_dict)
-
+    model.load_state_dict(load_dict, strict = not config.train.load_partial)
     if trainer.global_rank == 0:
         for n in model.state_dict():
             shape = model.state_dict()[n].shape

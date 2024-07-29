@@ -38,7 +38,7 @@ except:
 ########################################################################################################
 
 def get_second_submodel_layer_id(model_config:Model_Config):
-    return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
+    return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio) - model_config.preserve_last_n_layers
 
 from pydoc import locate
 
@@ -55,7 +55,7 @@ class Block(nn.Module):
         if self.layer_id == 0:
             self.ln0 = nn.LayerNorm(config.n_embd)
 
-        if config.tmix2 == '' or layer_id < get_second_submodel_layer_id(config):
+        if config.inv_other_layer_ratio <= 1 or layer_id < get_second_submodel_layer_id(config) or layer_id >= config.n_layer - config.preserve_last_n_layers:
             # first layer type
             tmix = config.tmix
             cmix = config.cmix
@@ -64,18 +64,24 @@ class Block(nn.Module):
             tmix = config.tmix2
             cmix = config.cmix2       
         
-        tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
-        tmix_factory = locate(tmix_typepath)
-        if tmix_factory is None:
-            print(f"Unsupported tmix model type: {tmix_typepath}")
-            exit(0)
+        if tmix == '':
+            tmix_factory = lambda config, layer_id: None
+        else:
+            tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
+            tmix_factory = locate(tmix_typepath)
+            if tmix_factory is None:
+                print(f"Unsupported tmix model type: {tmix_typepath}")
+                exit(0)
         tmix:nn.Module = tmix_factory(config, layer_id)
         
-        cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
-        cmix_factory = locate(cmix_typepath)
-        if cmix_factory is None:
-            print(f"Unsupported cmix model type: {cmix_typepath}")
-            exit(0)
+        if cmix == '':
+            cmix_factory = lambda config, layer_id: None
+        else:
+            cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
+            cmix_factory = locate(cmix_typepath)
+            if cmix_factory is None:
+                print(f"Unsupported cmix model type: {cmix_typepath}")
+                exit(0)
         cmix:nn.Module = cmix_factory(config, layer_id)
        
         self.is_cache_once = config.tmix2 == 'gold'
@@ -110,8 +116,15 @@ class Block(nn.Module):
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
-            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
-            dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
+            if self.att is not None:
+                dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
+            else:
+                dx_att, time_mix_state = torch.zeros_like(x), last_block_state.time_mix_state
+            if self.att is not None:
+                dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
+            else:
+                dx_ffn, channel_mix_state = torch.zeros_like(x), last_block_state.channel_mix_state
+
             x = self.drop0(x + dx_att + dx_ffn)
 
         return x, BlockState(time_mix_state, channel_mix_state)
@@ -289,7 +302,7 @@ class Transformer(nn.Module):
 
         param_dict = {n: p for n, p in self.named_parameters()}
         param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x)
-        if not train_config.load_partial:
+        if not train_config.load_partial and 'lora' not in self.config.model.tmix and 'lora' not in self.config.model.cmix:
             assert sorted(param_dict) == sorted(param_check)
 
         lr_decay = sorted(list(lr_decay))

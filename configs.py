@@ -14,8 +14,10 @@ class Model_Config:
     n_layer:int = 6
     n_embd:int = 512
     dropout:float = 0.0
-    inv_other_layer_ratio:float = 3
+    inv_other_layer_ratio:float = 1
+    preserve_last_n_layers:int = 0
     kv_cache_compression_ratio:float = 16
+    lora_rank:int = 0
 
 @dataclass(kw_only=True)
 class RoPE_Config:

@@ -31,7 +31,7 @@ train:
     devices: 4
     num_nodes: 1
     micro_bsz: 4
-    accumulate_grad_batches: 8
+    accumulate_grad_batches: 1
     strategy: deepspeed_stage_2 
     grad_cp: 1
     ds_bucket_mb: 2 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
