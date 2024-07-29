@@ -39,6 +39,7 @@ class Alibi_Config:
 class Transformer_Config(Model_Config):
     dim_att:int = 0
     dim_ffn:int = 0
+    dim_ffn_expert:int = 0
     head_size:int = 64
     head_size_divisor:int = 8
     rope:RoPE_Config|None = None

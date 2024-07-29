@@ -121,21 +121,21 @@ class Block(nn.Module):
             self.drop1 = nn.Identity()
 
     @TCompile
-    def forward(self, x, token_ids, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
+    def forward(self, x, x_original_cache, k_cache, last_model_state:ModelState, shared:Shared):
         last_block_state:BlockState = last_model_state.block_states[self.layer_id]
 
         if not self.parallel:
             if self.att is not None:
-                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
+                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, k_cache, last_model_state, shared)
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
             ln2x = self.ln2(x)
             if self.ffn is not None:
-                dffn_x, channel_mix_state = self.ffn(ln2x, last_block_state.channel_mix_state)
+                dffn_x, channel_mix_state = self.ffn(ln2x, last_model_state)
                 x = x + dffn_x
             if self.cmoe is not None:
-                dcmoe_x, channel_mix_state = self.cmoe(ln2x, token_ids, last_block_state.channel_mix_state)
+                dcmoe_x, channel_mix_state = self.cmoe(ln2x, last_model_state)
                 x = x + dcmoe_x
             if self.ffn is None and self.cmoe is None:
                 channel_mix_state = ChannelMixState()
@@ -143,8 +143,8 @@ class Block(nn.Module):
             x = self.drop0(x)
         else:
             # parallel
-            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
-            dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
+            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, k_cache, last_model_state, shared)
+            dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_model_state)
             x = self.drop0(x + dx_att + dx_ffn)
 
         return x, BlockState(time_mix_state, channel_mix_state)
@@ -246,8 +246,9 @@ class Transformer(nn.Module):
                     block.default_time_mix_state_factory(x, config, requires_grad),
                     block.default_channel_mix_state_factory(x, config, requires_grad),
                 ))
-            if self.is_cache_once:
+            if config.num_experts > 0:
                 last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=token_ids.device, requires_grad=False)
+            if self.is_cache_once:
                 last_model_state.k_cache = torch.zeros([B, 0, config.dim_att], dtype=x.dtype, device=x.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
@@ -261,13 +262,16 @@ class Transformer(nn.Module):
                 self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
                 x
             ], dim=-2)
-            next_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, token_ids], dim=-1)
         else:
-            x_original_from_input_cache = torch.tensor([])
+            x_original_from_input_cache = torch.zeros([B, 0, config.dim_att], dtype=x.dtype, device=x.device)
+
+        if config.num_experts > 0:
+            last_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, token_ids], dim=-1)
+
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
-            x, next_block_state = self.ckpt(block, x, token_ids, x_original_from_input_cache, k_cache, last_model_state, shared)
+            x, next_block_state = self.ckpt(block, x, x_original_from_input_cache, k_cache, last_model_state, shared)
             if self.is_cache_once and layer_id == get_second_submodel_layer_id(config) - 1:
                 compressed_k_cache_chunk = self.w_kv_cache_a(x)
                 k_tokencat_chunk = torch.cat([x_original_chunk, compressed_k_cache_chunk],dim=-1)
@@ -280,6 +284,7 @@ class Transformer(nn.Module):
         x = self.ln_out(x)
         x = self.head(x)
         next_model_state.k_cache = k_cache
+        next_model_state.input_tokens_cache = last_model_state.input_tokens_cache
         return x, next_model_state
 
     def get_optim_groups(self):
