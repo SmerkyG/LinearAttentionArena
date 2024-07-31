@@ -26,7 +26,7 @@ class Experts(nn.Module):
                 param.group_name = expert_group_name
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        chunks = inputs.chunk(self.num_local_experts, dim=1)
+        chunks = inputs.chunk(self.num_local_experts, dim=0)
         expert_outputs: List[torch.Tensor] = []
 
         # stupidity to preserve compatibility with torch.jit
@@ -40,4 +40,4 @@ class Experts(nn.Module):
                 out = out[0]  # Ignore the bias term for now
             expert_outputs += [out]
 
-        return torch.cat(expert_outputs, dim=1)
+        return torch.cat(expert_outputs, dim=0)

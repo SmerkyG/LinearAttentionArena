@@ -9,9 +9,9 @@ train:
     wandb: "Linear_Attention_Arena" 
     proj_dir: 'out'
  
-    train_stage: 3 
-    epoch_begin: 0
-    epoch_save: 10
+    #train_stage: 3 
+    #epoch_begin: 0
+    #epoch_save: 10
 
     data_type: "binidx" 
     data_file: "data/minipile" 

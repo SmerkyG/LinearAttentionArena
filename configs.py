@@ -71,8 +71,8 @@ class Train_Config:
     proj_name:str = ''
     proj_suffix:str = '0'
 
-    epoch_begin:int = 0
-    epoch_save:int = 5
+    #epoch_begin:int = 0
+    #epoch_save:int = 5
     micro_bsz:int = 12
 
     lr_decay_type:str = 'cos'
@@ -90,10 +90,14 @@ class Train_Config:
     grad_cp:int = 0
     gradient_clip_val:float = 1.0
 
+    ckpt_path:str = None
+    save_every_n_epochs:int = 0
+    save_every_n_steps:int = 0
+
     weight_decay:float = 0.0
     weight_decay_final:float = -1.0
 
-    train_stage:int = 0
+    #train_stage:int = 0
     layerwise_lr:int = 1
     ds_bucket_mb:int = 200
 

@@ -28,7 +28,7 @@ class MyDataset(Dataset):
 
         self.samples_per_epoch = config.runtime.epoch_global_steps * config.runtime.global_step_bsz
         #assert self.samples_per_epoch == 40320
-        rank_zero_info(f"########## training stage {config.train.train_stage} ##########")
+        #rank_zero_info(f"########## training stage {config.train.train_stage} ##########")
         dataset_slot = self.data_size // config.model.ctx_len
         assert config.train.my_exit_tokens <= self.data_size
         assert MaybeIsPrime(config.train.magic_prime)
@@ -50,7 +50,7 @@ class MyDataset(Dataset):
         magic_prime = config.train.magic_prime
         data = self.data
 
-        assert config.train.train_stage > 0
+        #assert config.train.train_stage > 0
         ii = 1 + epoch * self.samples_per_epoch + (idx * world_size) + rank
 
         factor = (math.sqrt(5) - 1) / 2

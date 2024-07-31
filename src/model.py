@@ -182,6 +182,12 @@ class Transformer(nn.Module):
 
         self.shared = Shared()
 
+    # def configure_model(self):
+    #     if hasattr(self, 'emb'):
+    #         return
+
+    #     args:Transformer_Config = self.config.model
+
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
         blocks = [Block(config.model, i) for i in range(args.n_layer)]
@@ -200,8 +206,8 @@ class Transformer(nn.Module):
             self.w_kv_cache_a = nn.Linear(args.n_embd, int(args.n_embd / args.kv_cache_compression_ratio), bias=False)
             self.w_kv_cache_b = nn.Linear(int(args.n_embd / args.kv_cache_compression_ratio) + args.n_embd, args.dim_att, bias=False)
 
-        # if self.training and config.train is not None and config.train.load_partial:
-        #     self.init_weights()
+        if self.training and config.train is not None and getattr(config.train, 'ckpt_path', None) in [None, '']:
+            self.init_weights()
 
     def ckpt(self, block, *block_args):
         if block.training and self.config.train.grad_cp == 1:
@@ -246,7 +252,7 @@ class Transformer(nn.Module):
                     block.default_time_mix_state_factory(x, config, requires_grad),
                     block.default_channel_mix_state_factory(x, config, requires_grad),
                 ))
-            if config.num_experts > 0:
+            if config.num_experts > 0 or self.is_cache_once:
                 last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=token_ids.device, requires_grad=False)
             if self.is_cache_once:
                 last_model_state.k_cache = torch.zeros([B, 0, config.dim_att], dtype=x.dtype, device=x.device, requires_grad=requires_grad)
@@ -307,20 +313,20 @@ class Transformer(nn.Module):
             elif (("_w1" in n) or ("_w2" in n)) and (train_config.layerwise_lr > 0):
                 lr_1x.add(n)
             elif (("time_mix" in n) or ("time_maa" in n)) and (train_config.layerwise_lr > 0):
-                if train_config.train_stage == 2:
-                    lr_2x.add(n)
-                else:
-                    lr_1x.add(n)
+                # if train_config.train_stage == 2:
+                #     lr_2x.add(n)
+                # else:
+                lr_1x.add(n)
             elif (("time_decay" in n) or ("time_daaaa" in n)) and (train_config.layerwise_lr > 0):
-                if train_config.train_stage == 2:
-                    lr_3x.add(n)
-                else:
-                    lr_2x.add(n)
+                # if train_config.train_stage == 2:
+                #     lr_3x.add(n)
+                # else:
+                lr_2x.add(n)
             elif ("time_faaaa" in n) and (train_config.layerwise_lr > 0):
-                if train_config.train_stage == 2:
-                    lr_2x.add(n)
-                else:
-                    lr_1x.add(n)
+                # if train_config.train_stage == 2:
+                #     lr_2x.add(n)
+                # else:
+                lr_1x.add(n)
             elif ("time_first" in n) and (train_config.layerwise_lr > 0):
                 lr_3x.add(n)
             elif ('.A_log' in n) or n.endswith('.bias'): # mamba
@@ -411,7 +417,7 @@ class Transformer(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-                for kk in [".att.output", ".ffn.value", ".ffn.receptance"]:
+                for kk in [".att.output", ".ffn.value", ".ffn.receptance", ".ffn_value", ".ffn_receptance"]:
                     if name.endswith(kk):
                         scale = 0
 
@@ -442,111 +448,111 @@ class Transformer(nn.Module):
             else:
                 print(name, "(default init)")
                 
-    def generate_init_weight(self):
-        print(
-            f"""
-############################################################################
-#
-# Init model weight (slow for large models)...
-#
-############################################################################
-"""
-        )
-        m = {}
-        n_params = 0
-        state_dict = self.state_dict()
-        for n in state_dict:
-            p = state_dict[n]
-            shape = p.shape
+#     def generate_init_weight(self):
+#         print(
+#             f"""
+# ############################################################################
+# #
+# # Init model weight (slow for large models)...
+# #
+# ############################################################################
+# """
+#         )
+#         m = {}
+#         n_params = 0
+#         state_dict = self.state_dict()
+#         for n in state_dict:
+#             p = state_dict[n]
+#             shape = p.shape
 
-            s0 = str(shape[0]) if len(shape) > 0 else ""
-            s1 = str(shape[1]) if len(shape) > 1 else ""
-            s2 = str(shape[2]) if len(shape) > 2 else ""
-            print(f"{s0.ljust(5)} {s1.ljust(5)} {s2.ljust(5)} {n}", end="")
+#             s0 = str(shape[0]) if len(shape) > 0 else ""
+#             s1 = str(shape[1]) if len(shape) > 1 else ""
+#             s2 = str(shape[2]) if len(shape) > 2 else ""
+#             print(f"{s0.ljust(5)} {s1.ljust(5)} {s2.ljust(5)} {n}", end="")
 
-            scale = 1.0
-            if "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
-                if 'ln_x' in n and n.endswith('.weight'):
-                    layer_scale = (1+int(n.split('.')[1])) / self.config.model.n_layer
-                    m[n] = (p * 0.0) + (layer_scale ** 0.7)
-                else:
-                    m[n] = p
-                print()
-            elif n == "emb.weight":
-                m[n] = p
-                scale = -1e-4
-                nn.init.uniform_(m[n], a=scale, b=-scale)
-                print(f" [scale {scale}]")
-            elif n == "head.weight":
-                m[n] = p
-                if self.config.model.vocab_size > self.config.model.n_embd:
-                    scale = 0.5 * math.sqrt(self.config.model.vocab_size / self.config.model.n_embd)
-                else:
-                    scale = 0.5
-                nn.init.orthogonal_(m[n], gain=scale)
-                print(f" [scale {scale}]")
-            elif 'mamba' in self.config.model.tmix and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_second_submodel_layer_id(self.config.model))):
-                m[n] = p
-                if '.out_proj.weight' in n:
-                    scale = 0
-                    nn.init.zeros_(m[n])
-                    print(f" [scale {scale}]")
-                    # nn.init.kaiming_uniform_(p, a=math.sqrt(5))
-                    # with torch.no_grad():
-                    #     n_residuals_per_layer = 2
-                    #     p /= math.sqrt(n_residuals_per_layer * self.config.model.n_layer)
-                    # print(f" [scale special residual]")
-                elif '.bias' in n:# and 'dt_proj.bias' not in n:
-                    scale = 0
-                    nn.init.zeros_(m[n])
-                    print(f" [scale {scale}]")
-                else:
-                    print()
-            elif len(p.shape) > 2 or "sin" in n or "cos" in n or "freqs" in n:
-                m[n] = p
-                print()
-            else:
-                assert n.endswith('.weight') # should always be true
+#             scale = 1.0
+#             if "ln_" in n or ".ln" in n or "time_" in n or "_mask" in n or "pos_emb" in n or '.mask.' in n or n.endswith('_w') or n.endswith('_w1') or n.endswith('_w2') or n.endswith('_bias'):
+#                 if 'ln_x' in n and n.endswith('.weight'):
+#                     layer_scale = (1+int(n.split('.')[1])) / self.config.model.n_layer
+#                     m[n] = (p * 0.0) + (layer_scale ** 0.7)
+#                 else:
+#                     m[n] = p
+#                 print()
+#             elif n == "emb.weight":
+#                 m[n] = p
+#                 scale = -1e-4
+#                 nn.init.uniform_(m[n], a=scale, b=-scale)
+#                 print(f" [scale {scale}]")
+#             elif n == "head.weight":
+#                 m[n] = p
+#                 if self.config.model.vocab_size > self.config.model.n_embd:
+#                     scale = 0.5 * math.sqrt(self.config.model.vocab_size / self.config.model.n_embd)
+#                 else:
+#                     scale = 0.5
+#                 nn.init.orthogonal_(m[n], gain=scale)
+#                 print(f" [scale {scale}]")
+#             elif 'mamba' in self.config.model.tmix and ((not self.is_cache_once) or (n.startswith('blocks') and int(n.split('.')[1]) < get_second_submodel_layer_id(self.config.model))):
+#                 m[n] = p
+#                 if '.out_proj.weight' in n:
+#                     scale = 0
+#                     nn.init.zeros_(m[n])
+#                     print(f" [scale {scale}]")
+#                     # nn.init.kaiming_uniform_(p, a=math.sqrt(5))
+#                     # with torch.no_grad():
+#                     #     n_residuals_per_layer = 2
+#                     #     p /= math.sqrt(n_residuals_per_layer * self.config.model.n_layer)
+#                     # print(f" [scale special residual]")
+#                 elif '.bias' in n:# and 'dt_proj.bias' not in n:
+#                     scale = 0
+#                     nn.init.zeros_(m[n])
+#                     print(f" [scale {scale}]")
+#                 else:
+#                     print()
+#             elif len(p.shape) > 2 or "sin" in n or "cos" in n or "freqs" in n:
+#                 m[n] = p
+#                 print()
+#             else:
+#                 assert n.endswith('.weight') # should always be true
 
-                zero = [".att.output.", ".ffn.value.", ".ffn.receptance.", ".ffn_value.", ".ffn_receptance."]
+#                 zero = [".att.output.", ".ffn.value.", ".ffn.receptance.", ".ffn_value.", ".ffn_receptance."]
 
-                for kk in zero:
-                    if kk in n:
-                        scale = 0
+#                 for kk in zero:
+#                     if kk in n:
+#                         scale = 0
 
-                for kk in [".att.key."]:
-                    if kk in n:
-                        scale = 0.1
-                for kk in [".att.gate."]:
-                    if kk in n:
-                        scale = 0.1
+#                 for kk in [".att.key."]:
+#                     if kk in n:
+#                         scale = 0.1
+#                 for kk in [".att.gate."]:
+#                     if kk in n:
+#                         scale = 0.1
 
-                print(f" [scale {scale}]")
+#                 print(f" [scale {scale}]")
 
-                if self.config.train.accelerator.upper() == "GPU":
-                    m[n] = torch.empty((shape[0], shape[1]), device="cuda")
-                else:
-                    m[n] = torch.empty((shape[0], shape[1]))
+#                 if self.config.train.accelerator.upper() == "GPU":
+#                     m[n] = torch.empty((shape[0], shape[1]), device="cuda")
+#                 else:
+#                     m[n] = torch.empty((shape[0], shape[1]))
 
-                if scale == 0:
-                    nn.init.zeros_(m[n])
-                elif scale < 0:
-                    nn.init.uniform_(m[n], a=scale, b=-scale)
-                else:
-                    nn.init.orthogonal_(m[n], gain=scale)
+#                 if scale == 0:
+#                     nn.init.zeros_(m[n])
+#                 elif scale < 0:
+#                     nn.init.uniform_(m[n], a=scale, b=-scale)
+#                 else:
+#                     nn.init.orthogonal_(m[n], gain=scale)
 
-            m[n] = m[n].cpu()
-            if os.environ["RWKV_FLOAT_MODE"] == "fp16":
-                m[n] = m[n].half()
-            elif os.environ["RWKV_FLOAT_MODE"] == "bf16":
-                m[n] = m[n].bfloat16()
-            n_params += m[n].numel()
+#             m[n] = m[n].cpu()
+#             if os.environ["RWKV_FLOAT_MODE"] == "fp16":
+#                 m[n] = m[n].half()
+#             elif os.environ["RWKV_FLOAT_MODE"] == "bf16":
+#                 m[n] = m[n].bfloat16()
+#             n_params += m[n].numel()
 
-            # if n == "emb.weight":
-            #     print(m[n])
+#             # if n == "emb.weight":
+#             #     print(m[n])
 
-        print('model params', n_params)
-        gc.collect()
-        torch.cuda.empty_cache()
-        return m
+#         print('model params', n_params)
+#         gc.collect()
+#         torch.cuda.empty_cache()
+#         return m
 

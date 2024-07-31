@@ -65,8 +65,6 @@ class RWKV_Expert(nn.Module):
             dim_ffn_expert = args.dim_ffn
         self.ffn_key = nn.Linear(args.n_embd, dim_ffn_expert, bias=False)
         self.ffn_value = nn.Linear(dim_ffn_expert, args.n_embd, bias=False)
-        nn.init.orthogonal_(self.ffn_key.weight)
-        nn.init.zeros_(self.ffn_value.weight)
 
     def forward(self, xk):
         return self.ffn_value( torch.relu( self.ffn_key(xk) ).square() )

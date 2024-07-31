@@ -25,6 +25,7 @@ from torch import Tensor
 from torch.nn import Module
 import torch.nn.functional as F
 from deepspeed.utils import groups
+import torch.distributed
 from .mappings import drop_tokens, gather_tokens
 
 import math
@@ -88,13 +89,12 @@ def gumbel_rsample(shape: Tuple, device: torch.device) -> Tensor:
     return gumbel(shape)
 
 
-from deepspeed import comm as dist
-
 # einsum dimensions: (g)roup, (s)equence, (e)xpert, (m)odel, (c)apacity
 # See https://arxiv.org/pdf/2006.16668.pdf for details.
 
 
 # Based on https://github.com/pytorch/pytorch/pull/40762
+from deepspeed import comm as dist
 class _AllToAll(torch.autograd.Function):
 
     @staticmethod
@@ -109,6 +109,28 @@ class _AllToAll(torch.autograd.Function):
     def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor]:
         return (None, _AllToAll.apply(ctx.group, *grad_output))
 
+# older deepspeed code
+# # Based on https://github.com/pytorch/pytorch/pull/40762
+# import torch.distributed as dist
+# class _AllToAll(torch.autograd.Function):
+
+#     @staticmethod
+#     def forward(
+#             ctx: Any,
+#             # TODO: replace with DS process group
+#             group: dist.ProcessGroup,
+#             input: Tensor,
+#             ) -> Tensor:  # type: ignore
+#         ctx.group = group
+#         input = input.contiguous()
+#         output = torch.empty_like(input)
+#         dist.all_to_all_single(output, input, group=group)
+#         return output
+
+#     @staticmethod
+#     def backward(ctx, grad_output):
+#         return (None, _AllToAll.apply(ctx.group, grad_output.contiguous()), None, None)
+    
 # einsum rewrites are on par or more performant
 # switch can be bubbled up in future
 USE_EINSUM = True
@@ -646,7 +668,7 @@ class MOELayer(Base):
             flat_input_by_flat_expert = torch.gather(flat_input, 0, flat_idx_by_flat_expert.view(-1, 1).expand(-1, d_input))
 
             if self.ep_size == 1:
-                flat_output_from_all = self.experts(flat_input_by_flat_expert.unsqueeze(0)).squeeze(0)
+                flat_output_from_all = self.experts(flat_input_by_flat_expert)
             else:
                 flat_input_for_my_experts_from_all = self.all_to_all(flat_input_by_flat_expert)
                 flat_output_for_my_experts = self.experts(flat_input_for_my_experts_from_all)
@@ -666,7 +688,7 @@ class MOELayer(Base):
             flat_input_in_expert_order = torch.gather(flat_input, 0, flat_idx_sorted_by_expert.view(-1, 1).expand(-1, d_input))
 
             if self.ep_size == 1:
-                flat_output_from_all = self.experts(flat_input_in_expert_order.unsqueeze(0)).squeeze(0)
+                flat_output_from_all = self.experts(flat_input_in_expert_order)
             else:
                 flat_input_for_my_experts_from_all = self.all_to_all(flat_input_in_expert_order)
                 flat_output_for_my_experts = self.experts(flat_input_for_my_experts_from_all)

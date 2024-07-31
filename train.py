@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from configs import parse_cmdline_configs, TrainerCLI_Config, Model_Config, Runtime_Config, Config
+from lightning.pytorch.callbacks import ModelCheckpoint
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +19,7 @@ if __name__ == "__main__":
     import numpy as np
     import torch
     from torch.utils.data import DataLoader
+    from torchdata.stateful_dataloader import StatefulDataLoader
   
     config, errors = parse_cmdline_configs(sys.argv[1:])
     if errors != '':
@@ -56,40 +58,40 @@ if __name__ == "__main__":
     if not os.path.exists(config.runtime.proj_path):
         os.makedirs(config.runtime.proj_path)
 
-    assert config.train.train_stage > 0
+    #assert config.train.train_stage > 0
 
     if config.train.lr2_init < 0:
         config.train.lr2_init = config.train.lr_init
     if config.train.lr2_final < 0:
         config.train.lr2_final = config.train.lr_final
 
-    EPOCH_SAMPLE_SIZE = 40320
-    runtime_config.epoch_count = config.train.magic_prime // EPOCH_SAMPLE_SIZE
+    EPOCH_SAMPLE_SIZE = 107520
+    runtime_config.epoch_count = config.train.my_exit_tokens // config.model.ctx_len // EPOCH_SAMPLE_SIZE
 
     runtime_config.epoch_global_steps = EPOCH_SAMPLE_SIZE // runtime_config.global_step_bsz
     assert runtime_config.epoch_global_steps * runtime_config.global_step_bsz == EPOCH_SAMPLE_SIZE
-    if config.train.train_stage >= 2:  # find latest saved model
-        list_p = []
-        for p in os.listdir(config.runtime.proj_path):
-            if p.startswith("rwkv") and p.endswith(".pth"):
-                p = ((p.split("-"))[1].split("."))[0]
-                if p != "final":
-                    if p == "init":
-                        p = -1
-                    else:
-                        p = int(p)
-                    list_p += [p]
-        list_p.sort()
-        max_p = list_p[-1]
-        if len(list_p) > 1:
-            runtime_config.my_pile_prev_p = list_p[-2]  # in case max_p is corrupted
-        if max_p == -1:
-            config.train.load_model = f"{config.runtime.proj_path}/rwkv-init.pth"
-        else:
-            config.train.load_model = f"{config.runtime.proj_path}/rwkv-{max_p}.pth"
-        if config.train.warmup_steps < 0:
-            config.train.warmup_steps = 10
-        config.train.epoch_begin = max_p + 1
+    # if config.train.train_stage >= 2:  # find latest saved model
+    #     list_p = []
+    #     for p in os.listdir(config.runtime.proj_path):
+    #         if p.startswith("rwkv") and p.endswith(".pth"):
+    #             p = ((p.split("-"))[1].split("."))[0]
+    #             if p != "final":
+    #                 if p == "init":
+    #                     p = -1
+    #                 else:
+    #                     p = int(p)
+    #                 list_p += [p]
+    #     list_p.sort()
+    #     max_p = list_p[-1]
+    #     if len(list_p) > 1:
+    #         runtime_config.my_pile_prev_p = list_p[-2]  # in case max_p is corrupted
+    #     if max_p == -1:
+    #         config.train.load_model = f"{config.runtime.proj_path}/rwkv-init.pth"
+    #     else:
+    #         config.train.load_model = f"{config.runtime.proj_path}/rwkv-{max_p}.pth"
+    if config.train.warmup_steps < 0:
+        config.train.warmup_steps = 10
+    #     config.train.epoch_begin = max_p + 1
 
     samples_per_epoch = runtime_config.epoch_global_steps * runtime_config.global_step_bsz
     tokens_per_epoch = samples_per_epoch * config.model.ctx_len
@@ -106,7 +108,7 @@ if __name__ == "__main__":
 #
 # Data = {config.train.data_file} ({config.train.data_type}), ProjDir = {config.runtime.proj_path}
 #
-# Epoch = {config.train.epoch_begin} to {config.runtime.epoch_count - 1} (will continue afterwards), save every {config.train.epoch_save} epoch
+# Epoch =  to {config.runtime.epoch_count - 1} (will continue afterwards), save every {config.train.save_every_n_epochs} epoch, {config.train.save_every_n_steps} steps
 #
 # Each "epoch" = {runtime_config.epoch_global_steps} global steps, {samples_per_epoch} samples, {tokens_per_epoch} tokens
 #
@@ -158,17 +160,31 @@ if __name__ == "__main__":
     # FIXME - why use_distributed_sampler=False? was this an oversight in the original repo? is this related to replace_sampler_ddp from Bo's code?
     trainer = Trainer(
                         use_distributed_sampler=False, 
-                        enable_checkpointing=False,
+                        enable_checkpointing=True,
                         num_sanity_val_steps=0,
                         logger=False,
-                        max_epochs=-1,
+                        max_epochs=config.runtime.epoch_count,
 
                         accelerator=config.train.accelerator, 
                         strategy=config.train.strategy, 
                         devices=config.train.devices, 
                         num_nodes=config.train.num_nodes, 
                         precision=config.train.precision,
-                        callbacks=[train_callback(config)], 
+                        callbacks=[
+                            train_callback(config),
+                            ModelCheckpoint(
+                                every_n_epochs=config.train.save_every_n_epochs,
+                                every_n_train_steps=config.train.save_every_n_steps,
+                                #monitor='loss',
+                                save_last=True,
+                                #monitor='step',
+                                #mode='max',
+                                #save_top_k=2,
+                                dirpath=f'{config.runtime.proj_path}/',
+                                #filename='rwkv-{epoch:02d}-{loss:.2f}'
+                                filename='{epoch:03d}-{step}'
+                            ),
+                        ], 
                         check_val_every_n_epoch=config.train.check_val_every_n_epoch, 
                         log_every_n_steps=config.train.log_every_n_steps, 
                         accumulate_grad_batches=config.train.accumulate_grad_batches, 
@@ -179,35 +195,35 @@ if __name__ == "__main__":
         model = Transformer(config)
         wrapper = LightningModelWrapper(model, config)
 
-    if config.train.train_stage == 1:  # should we build the initial weights?
-        init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"
-        mm = model.generate_init_weight()
-        print(f"Save to {init_weight_name}...")
-        torch.save(mm, init_weight_name)
-        print("Done. Now go for stage 2.")
-        exit(0)
+    # if config.train.train_stage == 1:  # should we build the initial weights?
+    #     init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"
+    #     mm = model.generate_init_weight()
+    #     print(f"Save to {init_weight_name}...")
+    #     torch.save(mm, init_weight_name)
+    #     print("Done. Now go for stage 2.")
+    #     exit(0)
 
-    rank_zero_info(f"########## Loading {config.train.load_model}... ##########")
-    load_dict = torch.load(config.train.load_model, map_location="cpu")
+    # rank_zero_info(f"########## Loading {config.train.load_model}... ##########")
+    # load_dict = torch.load(config.train.load_model, map_location="cpu")
 
-    if config.train.load_partial == 1:
-        load_keys = load_dict.keys()
+    # if config.train.load_partial == 1:
+    #     load_keys = load_dict.keys()
 
-        if config.model.num_experts > 0 and 'blocks.0.cmoe.moe.deepspeed_moe.gate.wg.weight' not in load_keys:
-            for i in range(config.model.n_layer):
-                load_dict[f'blocks.{i}.cmoe.time_maa_k'] = load_dict[f'blocks.{i}.ffn.time_maa_k']
-                load_dict[f'blocks.{i}.cmoe.time_maa_r'] = load_dict[f'blocks.{i}.ffn.time_maa_r']
-                if config.model.cmix == '':
-                    for e in range(config.model.num_experts):
-                        load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_key.weight'] = load_dict[f'blocks.{i}.ffn.key.weight']
-                        load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_value.weight'] = load_dict[f'blocks.{i}.ffn.value.weight']
-                        load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_receptance.weight'] = load_dict[f'blocks.{i}.ffn.receptance.weight']
+    #     if config.model.num_experts > 0 and 'blocks.0.cmoe.moe.deepspeed_moe.gate.wg.weight' not in load_keys:
+    #         for i in range(config.model.n_layer):
+    #             load_dict[f'blocks.{i}.cmoe.time_maa_k'] = load_dict[f'blocks.{i}.ffn.time_maa_k']
+    #             load_dict[f'blocks.{i}.cmoe.time_maa_r'] = load_dict[f'blocks.{i}.ffn.time_maa_r']
+    #             if config.model.cmix == '':
+    #                 for e in range(config.model.num_experts):
+    #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_key.weight'] = load_dict[f'blocks.{i}.ffn.key.weight']
+    #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_value.weight'] = load_dict[f'blocks.{i}.ffn.value.weight']
+    #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_receptance.weight'] = load_dict[f'blocks.{i}.ffn.receptance.weight']
 
-        for k in model.state_dict():
-            if k not in load_keys:
-                load_dict[k] = model.state_dict()[k]
+    #     for k in model.state_dict():
+    #         if k not in load_keys:
+    #             load_dict[k] = model.state_dict()[k]
 
-    model.load_state_dict(load_dict, strict = not config.train.load_partial)
+    # model.load_state_dict(load_dict, strict = not config.train.load_partial)
 
     if trainer.global_rank == 0:
         for n in model.state_dict():
@@ -228,9 +244,9 @@ if __name__ == "__main__":
     config.model.vocab_size = train_data.vocab_size
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)
-    train_data_loader = DataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.train.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
+    train_data_loader = StatefulDataLoader(train_data, shuffle=False, pin_memory=True, batch_size=config.train.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
     validation_data_loader = None
     if config.train.validation_data_file != "":
         validation_data_loader = DataLoader(validation_data, shuffle=False, pin_memory=True, batch_size=config.train.micro_bsz, num_workers=1, persistent_workers=False, drop_last=True)
 
-    trainer.fit(wrapper, train_dataloaders=train_data_loader, val_dataloaders=validation_data_loader)
+    trainer.fit(wrapper, train_dataloaders=train_data_loader, val_dataloaders=validation_data_loader, ckpt_path=config.train.ckpt_path)

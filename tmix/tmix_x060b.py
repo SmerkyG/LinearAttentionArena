@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 from cuda.rwkv6_cuda import RUN_CUDA_RWKV6
 from configs import Transformer_Config
-from src.state import TimeMixState, Shared
+from src.state import ModelState, TimeMixState, Shared
 from .tmix_rwkv_base import get_default_state
 
 class TMix_x060b(nn.Module):
@@ -54,7 +54,8 @@ class TMix_x060b(nn.Module):
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
+    def forward(self, x, xo, kv_cache, last_model_state:ModelState, shared:Shared):
+        last_state = last_model_state.block_states[self.layer_id].time_mix_state
         B, T, C = x.size()
         H = self.n_head
 
@@ -76,6 +77,8 @@ class TMix_x060b(nn.Module):
         v = self.value(xv)
         w = self.time_decay + torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
         u = self.time_faaaa
+
+        k = (k * (1 - (-w.exp()).exp())).to(r.dtype)
 
         wkv_state = last_state.wkv_state.clone()
         x = RUN_CUDA_RWKV6(r, k, v, w, u, wkv_state)
