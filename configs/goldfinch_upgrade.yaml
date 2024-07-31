@@ -1,11 +1,21 @@
 model:
     __type__: configs.Transformer_Config
     tmix: x060
+    cmix: x060
     tmix2: gold
+    cmix2: x060
     inv_other_layer_ratio: 6
+    preserve_last_n_layers: 0
+    rope:
+        __type__: configs.RoPE_Config
+        base: 500000
 
 train:
     load_partial: 1
-    epoch_save: 1
+
+    lr_decay_type: oneminussqrt
+    lr_wait: 0.8
+    lr_init: 3e-4
     lr_final: 1e-5
-    
+    lr2_init: 3e-4
+    lr2_final: 1e-5

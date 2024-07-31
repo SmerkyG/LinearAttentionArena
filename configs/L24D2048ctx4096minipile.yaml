@@ -16,7 +16,7 @@ train:
     data_type: "binidx" 
     data_file: "data/minipile" 
     validation_data_file: "data/minipile_validation" 
-    val_check_interval: 100 
+    val_check_interval: 72
     my_exit_tokens: 1498226207
     magic_prime: 365759
 
@@ -31,7 +31,7 @@ train:
     devices: 4
     num_nodes: 1
     micro_bsz: 4
-    accumulate_grad_batches: 1
+    accumulate_grad_batches: 24
     strategy: deepspeed_stage_2 
     grad_cp: 1
     ds_bucket_mb: 2 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
