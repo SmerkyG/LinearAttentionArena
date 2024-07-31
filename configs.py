@@ -59,8 +59,21 @@ class Runtime_Config:
     epoch_count:int = 999999999
 
 @dataclass(kw_only=True)
+class InferenceConfig:
+    train:typing.Any = None
+    model: Model_Config
+    path:str = ''
+
+@dataclass(kw_only=True)
+class TeacherConfig(InferenceConfig):
+    kl_weight:float = 0.5
+    ce_weight:float = 0.5
+
+@dataclass(kw_only=True)
 class Train_Config:
     seed_everything:int = 1337
+
+    teacher:TeacherConfig = None
 
     load_model:str = ''
     wandb:str = ''
@@ -74,8 +87,12 @@ class Train_Config:
 
     lr_decay_type:str = 'cos'
     lr_wait:float = 0.0
+    chunk_len:int = 0
+
     lr_init:float = 6e-4
     lr_final:float = 1e-5
+    lr2_init:float = -1
+    lr2_final:float = -1
     warmup_steps:int = -1
     beta1:float = 0.9
     beta2:float = 0.99

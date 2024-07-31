@@ -88,6 +88,10 @@ class Block(nn.Module):
 
         #self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
         self.att = tmix
+        self.gold = None
+        if self.is_cache_once and layer_id >= get_second_submodel_layer_id(config) and layer_id < config.n_layer - config.preserve_last_n_layers:
+            self.att = None
+            self.gold = tmix
         
         #self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
         self.ffn = cmix
@@ -107,6 +111,9 @@ class Block(nn.Module):
             if self.att is not None:
                 dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
                 x = self.drop0(x + dx)
+            elif self.gold is not None:
+                dx, time_mix_state = self.gold(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
+                x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
             if self.ln2 is not None and self.ffn is not None:
@@ -120,7 +127,7 @@ class Block(nn.Module):
                 dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
             else:
                 dx_att, time_mix_state = torch.zeros_like(x), last_block_state.time_mix_state
-            if self.att is not None:
+            if self.ffn is not None:
                 dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
             else:
                 dx_ffn, channel_mix_state = torch.zeros_like(x), last_block_state.channel_mix_state
@@ -168,8 +175,12 @@ class Transformer(nn.Module):
         self.default_time_mix_state_factories = []
         self.default_channel_mix_state_factories = []
         for block in blocks:
-            self.default_time_mix_state_factories.append(block.att.get_default_state_factory() if hasattr(block.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
-            self.default_channel_mix_state_factories.append(block.ffn.get_default_state_factory() if hasattr(block.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState())        
+            if block.att is not None:
+                self.default_time_mix_state_factories.append(block.att.get_default_state_factory() if hasattr(block.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
+            if block.gold is not None:
+                self.default_time_mix_state_factories.append(block.gold.get_default_state_factory() if hasattr(block.gold, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
+            if block.ffn is not None:
+                self.default_channel_mix_state_factories.append(block.ffn.get_default_state_factory() if hasattr(block.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState())        
         self.blocks = nn.ModuleList([TJIT(block) for block in blocks])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
@@ -184,6 +195,9 @@ class Transformer(nn.Module):
         if self.is_cache_once:
             self.w_kv_cache_a = nn.Linear(args.n_embd, int(args.n_embd / args.kv_cache_compression_ratio), bias=False)
             self.w_kv_cache_b = nn.Linear(int(args.n_embd / args.kv_cache_compression_ratio) + args.n_embd, args.dim_att, bias=False)
+
+        if self.training and hasattr(config, 'train') and config.train is not None and getattr(config.train, 'load_partial', 0):
+            self.init_weights()
 
     def ckpt(self, block, *block_args):
         if block.training and self.config.train.grad_cp == 1:
@@ -271,9 +285,23 @@ class Transformer(nn.Module):
         lr_1x = set()
         lr_2x = set()
         lr_3x = set()
+        lr2 = set()
         for n, p in self.named_parameters():
             if not p.requires_grad:
                 continue
+            # if train_config.load_partial and (
+            #     '.gold.' in n
+            #     #'.att.' in n and (int(n.split('.')[1]) >= get_second_submodel_layer_id(self.config.model) and int(n.split('.')[1]) < self.config.model.n_layer - self.config.model.preserve_last_n_layers)
+            # ):
+            # #     ('.att.' in n or '.ffn.' in n) 
+            # #     # not ('.att.' in n or '.ffn.' in n) 
+            # #     # or 
+            # #     # (int(n.split('.')[1]) >= get_second_submodel_layer_id(self.config.model) and int(n.split('.')[1]) < self.config.model.n_layer - self.config.model.preserve_last_n_layers)
+            # # ):
+            #     lr2.add(n)
+            # # elif self.is_cache_once and ('ln_out.' in n or 'head.' in n):
+            # #     lr2.add(n)
+            # el
             if (("_w1" in n) or ("_w2" in n)) and (train_config.layerwise_lr > 0):
                 lr_1x.add(n)
             elif (("time_mix" in n) or ("time_maa" in n)) and (train_config.layerwise_lr > 0):
@@ -301,7 +329,7 @@ class Transformer(nn.Module):
                 lr_1x.add(n)
 
         param_dict = {n: p for n, p in self.named_parameters()}
-        param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x)
+        param_check = list(lr_decay) + list(lr_1x) + list(lr_2x) + list(lr_3x) + list(lr2)
         if not train_config.load_partial and 'lora' not in self.config.model.tmix and 'lora' not in self.config.model.cmix:
             assert sorted(param_dict) == sorted(param_check)
 
@@ -309,12 +337,13 @@ class Transformer(nn.Module):
         lr_1x = sorted(list(lr_1x))
         lr_2x = sorted(list(lr_2x))
         lr_3x = sorted(list(lr_3x))
+        lr2 = sorted(list(lr2))
         
         print('decay', lr_decay, '\n')
         print('1x', lr_1x, '\n')
         print('2x', lr_2x, '\n')
         print('3x', lr_3x, '\n')
-
+        print('lr2', lr2, '\n')
         
         optim_groups = [
             {"params": [param_dict[n] for n in lr_1x], "weight_decay": 0.0, "my_lr_scale": 1.0, 'name':'lr_1x'},
@@ -323,11 +352,91 @@ class Transformer(nn.Module):
             optim_groups += [{"params": [param_dict[n] for n in lr_2x], "weight_decay": 0.0, "my_lr_scale": 2.0, 'name':'lr_2x'}]
         if len(lr_3x) > 0:
             optim_groups += [{"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0, 'name':'lr_3x'}]
+        if len(lr2) > 0:
+            optim_groups += [{"params": [param_dict[n] for n in lr2], "weight_decay": 0.0, "my_lr_scale": 1.0, 'name':'lr2'}]
         if len(lr_decay) > 0:
             optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": train_config.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
 
         return optim_groups
 
+    #
+    # Custom overwrite of manual_backwards operation, to skip the "manual_backwards"
+    # safety check, so we can perform manual backward operation step, while using
+    # the default trainer loop. This is modified from the original code found here:
+    # https://github.com/Lightning-AI/lightning/blob/37c244f94be365496def82870b22c2faf0ab889e/src/lightning/pytorch/core/module.py#L999
+    #
+    # ---
+    # 
+    # This allow us to avoid disabling the "automatic_optimization" flag
+    #
+    # Which would have been required to do "segmented learning", or "Backpropagation Through Time"
+    # where we would need to implement manual optimization as per
+    # https://lightning.ai/docs/pytorch/stable/model/manual_optimization.html
+    #
+    # Otherwise an error will be thrown if we call `self.manual_backward`
+    #
+    # However this would mean that we would need to do a full reimplementation
+    # of several features that were handled by the automatic optimization.
+    # - accumulate_grad_batches
+    # - gradient_clip_val
+    # - logging behaviour
+    # - distributed training co-ordination
+    # - (And probably other features that I am not aware of)
+    #
+    # So this is a hacky work around, to avoid reimplementing all of the above.
+    # 
+    # From the current code implementatiion, it seem like this is blocked only by 
+    # automatic_optimization flag - and has no adverse side effect otherwise
+    # https://lightning.ai/docs/pytorch/stable/_modules/lightning/pytorch/core/module.html#LightningModule.manual_backward
+    #
+    # If anyone have a better idea, let me know
+    # (have experimented with, reimplementing the above, but it is not trivial, unfortunately)
+    #
+    def manual_backward(self, loss: torch.Tensor, *args, **kwargs):
+        if self._fabric:
+            self._fabric.backward(loss, *args, **kwargs)
+        else:
+            # self._verify_is_manual_optimization("manual_backward")
+            self.trainer.strategy.backward(loss, None, *args, **kwargs)
+            
+    def init_weights(self):
+        for name, m in self.named_modules():               
+            scale = 1.0
+            if isinstance(m, nn.Linear):
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+                for kk in [".att.output", ".gold.output", ".ffn.value", ".ffn.receptance"]:
+                    if name.endswith(kk):
+                        scale = 0
+
+                for kk in [".att.key"]:
+                    if name.endswith(kk):
+                        scale = 0.1
+
+                if name == "head":
+                    if self.config.model.vocab_size > self.config.model.n_embd:
+                        scale = 0.5 * math.sqrt(self.config.model.vocab_size / self.config.model.n_embd)
+                    else:
+                        scale = 0.5
+
+                if scale == 0:
+                    nn.init.zeros_(m.weight)
+                else:   
+                    nn.init.orthogonal_(m.weight, gain=scale)
+
+                print(f"{name} scale={scale}")
+            elif isinstance(m, nn.Embedding):
+                nn.init.uniform_(m.weight, a=-1e-4, b=1e-4)
+                print(name, "embed init")
+            elif name.endswith('.ln_x'):
+                layer_id = int(name.split('.')[1])
+                layer_scale = (1+layer_id) / self.config.model.n_layer
+                m.weight = nn.Parameter((m.weight * 0.0) + (layer_scale ** 0.7))
+                print(name, "layer_scale init")
+            else:
+                print(name, "(default init)")
+                
     def generate_init_weight(self):
         print(
             f"""

@@ -56,6 +56,7 @@ class TMix_gold(nn.Module):
 
         self.query = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
+        nn.init.zeros_(self.output.weight)
         self.ln_q = nn.LayerNorm(args.dim_att)
         self.ln_k = nn.LayerNorm(args.dim_att)
         self.ln_v = nn.LayerNorm(args.dim_att)

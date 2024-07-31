@@ -100,9 +100,9 @@ class TMix_x060lora(nn.Module):
         g = self.gate(xg)
 
         if self.receptance_w1 is not None:
-            r = r + (xr @ self.receptance_w1).tanh() @ self.receptance_w2
-            k = k + (xk @ self.key_w1).tanh() @ self.key_w2
-            v = v + (xv @ self.value_w1).tanh() @ self.value_w2
+            r = (r + (xr @ self.receptance_w1).tanh() @ self.receptance_w2).to(r.dtype)
+            k = (k + (xk @ self.key_w1).tanh() @ self.key_w2).to(r.dtype)
+            v = (v + (xv @ self.value_w1).tanh() @ self.value_w2).to(r.dtype)
 
         g = F.silu(g)
         
@@ -121,5 +121,5 @@ class TMix_x060lora(nn.Module):
         x = x * g
         y = self.output(x)
         if self.out_w1 is not None:
-            y = y + (x @ self.out_w1).tanh() @ self.out_w2
+            y = (y + (x @ self.out_w1).tanh() @ self.out_w2).to(r.dtype)
         return y, TimeMixState(wkv_state, shift_state)

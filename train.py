@@ -39,6 +39,10 @@ if __name__ == "__main__":
     os.environ["RWKV_MODEL_TYPE"] = config.model.tmix
     os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
     os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
+    if config.train.teacher is not None and config.train.teacher.path != '':
+        os.environ["RWKV_MODEL_TYPE"] = os.environ["RWKV_MODEL_TYPE"] + '_' + config.train.teacher.model.tmix
+        os.environ["RWKV_CTXLEN"] = str(max(config.model.ctx_len, config.train.teacher.model.ctx_len))
+        # FIXME - no way to account for head_size here, but thank goodness no one uses any size other than 64 for rwkv
 
     model_name = f'{config.model.tmix}'
     if config.model.tmix2 != '':
@@ -57,6 +61,11 @@ if __name__ == "__main__":
         os.makedirs(config.runtime.proj_path)
 
     assert config.train.train_stage > 0
+
+    if config.train.lr2_init < 0:
+        config.train.lr2_init = config.train.lr_init
+    if config.train.lr2_final < 0:
+        config.train.lr2_final = config.train.lr_final
 
     EPOCH_SAMPLE_SIZE = 40320
     runtime_config.epoch_count = config.train.magic_prime // EPOCH_SAMPLE_SIZE
@@ -173,9 +182,20 @@ if __name__ == "__main__":
                         gradient_clip_val=config.train.gradient_clip_val, 
                         val_check_interval=config.train.val_check_interval)
 
+    teacher = None
+    if config.train.train_stage > 1:
+        teacher_config = config.train.teacher
+        if teacher_config is not None and teacher_config.path != '':
+            load_dict = torch.load(teacher_config.path, map_location="cpu")
+            with trainer.init_module(empty_init=True):
+                teacher = Transformer(teacher_config)
+            teacher.load_state_dict(load_dict)
+            teacher.eval()
+            teacher.requires_grad_(False)
+
     with trainer.init_module(empty_init=not config.train.load_partial):
         model = Transformer(config)
-        wrapper = LightningModelWrapper(model, config)
+        wrapper = LightningModelWrapper(model, config, teacher)
 
     if config.train.train_stage == 1:  # should we build the initial weights?
         init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"
@@ -188,12 +208,19 @@ if __name__ == "__main__":
     rank_zero_info(f"########## Loading {config.train.load_model}... ##########")
     load_dict = torch.load(config.train.load_model, map_location="cpu")
 
+    second_model_sublayer_id = int(config.model.n_layer * (config.model.inv_other_layer_ratio - 1) / config.model.inv_other_layer_ratio) - config.model.preserve_last_n_layers
     if config.train.load_partial == 1:
         load_keys = load_dict.keys()
         for k in model.state_dict():
             if k not in load_keys:
                 load_dict[k] = model.state_dict()[k]
     model.load_state_dict(load_dict, strict = not config.train.load_partial)
+    # if config.train.load_partial == 1:
+    #     model.emb.requires_grad_(False)
+    #     for layer_id in range(config.model.n_layer):
+    #         if layer_id < second_model_sublayer_id - 2:
+    #             for n, p in model.blocks[layer_id].named_parameters():
+    #                 p.requires_grad_(False)
     if trainer.global_rank == 0:
         for n in model.state_dict():
             shape = model.state_dict()[n].shape
