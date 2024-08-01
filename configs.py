@@ -106,7 +106,7 @@ class Train_Config:
     load_partial:int = 0
 
     check_val_every_n_epoch:int = 1
-    val_check_interval:int|None = None
+    val_check_interval:float|int|None = None
     log_every_n_steps:int = 50
 
     accelerator:str = 'gpu'

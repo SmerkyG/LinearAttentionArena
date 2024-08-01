@@ -1,9 +1,67 @@
 from dataclasses import dataclass
 from configs import parse_cmdline_configs, TrainerCLI_Config, Model_Config, Runtime_Config, Config
-from lightning.pytorch.callbacks import ModelCheckpoint
+import lightning.pytorch.callbacks
 import logging
 
 logging.basicConfig(level=logging.INFO)
+
+from lightning.fabric.utilities.types import _PATH
+from typing import Any, Dict, Optional, Set
+from datetime import timedelta
+class ModelCheckpoint(lightning.pytorch.callbacks.ModelCheckpoint):
+
+    def __init__(
+        self,
+        dirpath: Optional[_PATH] = None,
+        filename: Optional[str] = None,
+        monitor: Optional[str] = None,
+        verbose: bool = False,
+        save_last: Optional[bool] = None,
+        save_top_k: int = 1,
+        save_weights_only: bool = False,
+        mode: str = "min",
+        auto_insert_metric_name: bool = True,
+        every_n_train_steps: Optional[int] = None,
+        train_time_interval: Optional[timedelta] = None,
+        every_n_epochs: Optional[int] = None,
+        save_on_train_epoch_end: Optional[bool] = None,
+        enable_version_counter: bool = True,
+    ):
+        super().__init__(
+            dirpath,
+            filename,
+            monitor,
+            verbose,
+            save_last,
+            save_top_k,
+            save_weights_only,
+            mode,
+            auto_insert_metric_name,
+            every_n_train_steps,
+            train_time_interval,
+            every_n_epochs,
+            save_on_train_epoch_end,
+            enable_version_counter,
+        )
+
+    def on_train_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        """Save a checkpoint at the end of the training epoch."""
+        if not self._should_skip_saving_checkpoint(trainer) and self._should_save_on_train_epoch_end(trainer):
+            monitor_candidates = self._monitor_candidates(trainer)
+            if self._every_n_epochs >= 1 and (trainer.current_epoch + 1) % self._every_n_epochs == 0:
+                self._save_topk_checkpoint(trainer, monitor_candidates)
+                # NOTE - moved this over so we don't save when not the correct epoch
+                self._save_last_checkpoint(trainer, monitor_candidates)
+
+    def on_validation_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        """Save a checkpoint at the end of the validation stage."""
+        if not self._should_skip_saving_checkpoint(trainer) and not self._should_save_on_train_epoch_end(trainer):
+            monitor_candidates = self._monitor_candidates(trainer)
+            if self._every_n_epochs >= 1 and (trainer.current_epoch + 1) % self._every_n_epochs == 0:
+                self._save_topk_checkpoint(trainer, monitor_candidates)
+                # NOTE - moved this over so we don't save when not the correct epoch
+                self._save_last_checkpoint(trainer, monitor_candidates)
+    
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
@@ -175,14 +233,15 @@ if __name__ == "__main__":
                             ModelCheckpoint(
                                 every_n_epochs=config.train.save_every_n_epochs,
                                 every_n_train_steps=config.train.save_every_n_steps,
+                                save_on_train_epoch_end=True,
                                 #monitor='loss',
                                 save_last=True,
-                                #monitor='step',
-                                #mode='max',
-                                #save_top_k=2,
+                                monitor='step',
+                                mode='max',
+                                save_top_k=10,
                                 dirpath=f'{config.runtime.proj_path}/',
                                 #filename='rwkv-{epoch:02d}-{loss:.2f}'
-                                filename='{epoch:03d}-{step}'
+                                filename='{epoch:03d}-{step}',
                             ),
                         ], 
                         check_val_every_n_epoch=config.train.check_val_every_n_epoch, 
