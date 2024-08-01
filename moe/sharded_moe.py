@@ -646,7 +646,7 @@ class MOELayer(Base):
         flat_tokens = tokens.reshape(-1)
         expert_by_flat_idx = (flat_tokens * self.hash_prime) % n_experts
 
-        use_capacity = False
+        use_capacity = True #False
 
         if use_capacity:
             n_tokens = flat_tokens.size(0)

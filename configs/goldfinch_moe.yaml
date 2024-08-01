@@ -1,0 +1,16 @@
+model:
+    __type__: configs.FinchC2_Config
+    tmix: x060b
+    cmix: x060moe
+    tmix2: gold
+    cmix2: x060moe
+    inv_other_layer_ratio: 3
+    num_experts: 64
+    ep_size: 8
+    rope:
+        __type__: configs.RoPE_Config
+        base: 1000000
+
+train:
+    #save_every_n_steps: 10
+    save_every_n_epochs: 5

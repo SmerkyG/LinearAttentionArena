@@ -65,7 +65,7 @@ if __name__ == "__main__":
     if config.train.lr2_final < 0:
         config.train.lr2_final = config.train.lr_final
 
-    EPOCH_SAMPLE_SIZE = 107520
+    EPOCH_SAMPLE_SIZE = 65536 # 3*5*7*1024 # 107520
     runtime_config.epoch_count = config.train.my_exit_tokens // config.model.ctx_len // EPOCH_SAMPLE_SIZE
 
     runtime_config.epoch_global_steps = EPOCH_SAMPLE_SIZE // runtime_config.global_step_bsz

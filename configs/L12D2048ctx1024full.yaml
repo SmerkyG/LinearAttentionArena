@@ -1,0 +1,36 @@
+model:
+    __type__: configs.Transformer_Config
+    ctx_len: 1024
+    n_layer: 12
+    n_embd: 2048
+    vocab_size: 65536
+
+train:
+    wandb: "goldfinch-moe" 
+    proj_dir: 'out'
+ 
+    data_type: "binidx" 
+    data_file: "/share/Full/dataset_chunk_0_text_document" 
+    #validation_data_file: "data/minipile_validation" 
+    #val_check_interval: 100 
+    my_exit_tokens: 427282462982
+    magic_prime: 417267857
+
+    lr_decay_type: oneminussqrt
+    lr_wait: 0.8
+    lr_init: 3e-4
+    lr_final: 2e-5
+    warmup_steps: 10 
+    beta1: 0.9 
+    beta2: 0.99 
+    adam_eps: 1e-8 
+    weight_decay: 0.001 
+
+    devices: 8
+    num_nodes: 1
+    micro_bsz: 128
+    accumulate_grad_batches: 4
+    log_every_n_steps: 5
+    strategy: deepspeed_stage_2 
+    grad_cp: 1
+    ds_bucket_mb: 200 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
