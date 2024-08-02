@@ -50,6 +50,9 @@ class LightningModelWrapper(pl.LightningModule):
     def forward(self, idx, last_model_state:ModelState|None = None):
         return self.model.forward(idx, last_model_state)
     
+    # def configure_model(self):
+    #     return self.model.configure_model()
+    
     def configure_optimizers(self):
         train_config = self.config.train
         

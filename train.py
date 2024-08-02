@@ -123,7 +123,7 @@ if __name__ == "__main__":
     if config.train.lr2_final < 0:
         config.train.lr2_final = config.train.lr_final
 
-    EPOCH_SAMPLE_SIZE = 65536 # 3*5*7*1024 # 107520
+    EPOCH_SAMPLE_SIZE = 40320 #65536 # 3*5*7*1024 # 107520
     runtime_config.epoch_count = config.train.my_exit_tokens // config.model.ctx_len // EPOCH_SAMPLE_SIZE
 
     runtime_config.epoch_global_steps = EPOCH_SAMPLE_SIZE // runtime_config.global_step_bsz
@@ -262,27 +262,30 @@ if __name__ == "__main__":
     #     print("Done. Now go for stage 2.")
     #     exit(0)
 
-    # rank_zero_info(f"########## Loading {config.train.load_model}... ##########")
-    # load_dict = torch.load(config.train.load_model, map_location="cpu")
+    if config.train.ckpt_path.lower().endswith('.pth'):
+        rank_zero_info(f"########## Loading {config.train.ckpt_path}... ##########")
+        load_dict = torch.load(config.train.ckpt_path, map_location="cpu")
 
-    # if config.train.load_partial == 1:
-    #     load_keys = load_dict.keys()
+        # if config.train.load_partial == 1:
+        #     load_keys = load_dict.keys()
 
-    #     if config.model.num_experts > 0 and 'blocks.0.cmoe.moe.deepspeed_moe.gate.wg.weight' not in load_keys:
-    #         for i in range(config.model.n_layer):
-    #             load_dict[f'blocks.{i}.cmoe.time_maa_k'] = load_dict[f'blocks.{i}.ffn.time_maa_k']
-    #             load_dict[f'blocks.{i}.cmoe.time_maa_r'] = load_dict[f'blocks.{i}.ffn.time_maa_r']
-    #             if config.model.cmix == '':
-    #                 for e in range(config.model.num_experts):
-    #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_key.weight'] = load_dict[f'blocks.{i}.ffn.key.weight']
-    #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_value.weight'] = load_dict[f'blocks.{i}.ffn.value.weight']
-    #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_receptance.weight'] = load_dict[f'blocks.{i}.ffn.receptance.weight']
+        #     if config.model.num_experts > 0 and 'blocks.0.cmoe.moe.deepspeed_moe.gate.wg.weight' not in load_keys:
+        #         for i in range(config.model.n_layer):
+        #             load_dict[f'blocks.{i}.cmoe.time_maa_k'] = load_dict[f'blocks.{i}.ffn.time_maa_k']
+        #             load_dict[f'blocks.{i}.cmoe.time_maa_r'] = load_dict[f'blocks.{i}.ffn.time_maa_r']
+        #             if config.model.cmix == '':
+        #                 for e in range(config.model.num_experts):
+        #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_key.weight'] = load_dict[f'blocks.{i}.ffn.key.weight']
+        #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_value.weight'] = load_dict[f'blocks.{i}.ffn.value.weight']
+        #                     load_dict[f'blocks.{i}.cmoe.moe.deepspeed_moe.experts.deepspeed_experts.{e}.ffn_receptance.weight'] = load_dict[f'blocks.{i}.ffn.receptance.weight']
 
-    #     for k in model.state_dict():
-    #         if k not in load_keys:
-    #             load_dict[k] = model.state_dict()[k]
+        #     for k in model.state_dict():
+        #         if k not in load_keys:
+        #             load_dict[k] = model.state_dict()[k]
 
-    # model.load_state_dict(load_dict, strict = not config.train.load_partial)
+        model.load_state_dict(load_dict, strict = not config.train.load_partial)
+
+        config.train.ckpt_path = None
 
     if trainer.global_rank == 0:
         for n in model.state_dict():

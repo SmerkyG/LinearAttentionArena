@@ -186,6 +186,7 @@ class Transformer(nn.Module):
     #     if hasattr(self, 'emb'):
     #         return
 
+    #     config = self.config
     #     args:Transformer_Config = self.config.model
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
@@ -206,7 +207,7 @@ class Transformer(nn.Module):
             self.w_kv_cache_a = nn.Linear(args.n_embd, int(args.n_embd / args.kv_cache_compression_ratio), bias=False)
             self.w_kv_cache_b = nn.Linear(int(args.n_embd / args.kv_cache_compression_ratio) + args.n_embd, args.dim_att, bias=False)
 
-        if self.training and config.train is not None and getattr(config.train, 'ckpt_path', None) in [None, '']:
+        if self.training and config.train is not None and (config.train.load_partial or getattr(config.train, 'ckpt_path', None) in [None, '']):
             self.init_weights()
 
     def ckpt(self, block, *block_args):
@@ -304,11 +305,13 @@ class Transformer(nn.Module):
         for n, p in self.named_parameters():
             if not p.requires_grad:
                 continue
+            if '.moe.' in n or '.ffn.ffn.' in n:
+                lr2.add(n)
             #if train_config.load_partial and self.is_cache_once and ('.att.' in n or '.ffn.' in n) and int(n.split('.')[1]) >= get_second_submodel_layer_id(self.config.model):
             #    lr2.add(n)
             # elif self.is_cache_once and ('ln_out.' in n or 'head.' in n):
             #     lr2.add(n)
-            if train_config.load_partial and '.cmoe.' in n:
+            elif train_config.load_partial and '.cmoe.' in n:
                 lr2.add(n)
             elif (("_w1" in n) or ("_w2" in n)) and (train_config.layerwise_lr > 0):
                 lr_1x.add(n)
@@ -361,7 +364,8 @@ class Transformer(nn.Module):
         if len(lr_3x) > 0:
             optim_groups += [{"params": [param_dict[n] for n in lr_3x], "weight_decay": 0.0, "my_lr_scale": 3.0, 'name':'lr_3x'}]
         if len(lr2) > 0:
-            optim_groups += [{"params": [param_dict[n] for n in lr2], "weight_decay": 0.0, "my_lr_scale": 1.0, 'name':'lr2'}]
+            # NOTE - split params for DeepSpeed MoE messes with the group name! so can't rely on that to be the same
+            optim_groups += [{"params": [param_dict[n] for n in lr2], "weight_decay": 0.0, "my_lr_scale": 1.0, 'name':'lr2', 'lrtype':'lr2'}]
         if len(lr_decay) > 0:
             optim_groups += [{"params": [param_dict[n] for n in lr_decay], "weight_decay": train_config.weight_decay, "my_lr_scale": 1.0, 'name':'lr_decay'}]
 

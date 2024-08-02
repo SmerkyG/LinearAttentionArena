@@ -65,7 +65,7 @@ class Runtime_Config:
 class Train_Config:
     seed_everything:int = 1337
 
-    load_model:str = ''
+    #load_model:str = ''
     wandb:str = ''
     proj_dir:str = 'out'
     proj_name:str = ''

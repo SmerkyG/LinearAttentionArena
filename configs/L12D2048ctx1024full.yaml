@@ -11,8 +11,8 @@ train:
  
     data_type: "binidx" 
     data_file: "/share/Full/dataset_chunk_0_text_document" 
-    #validation_data_file: "data/minipile_validation" 
-    #val_check_interval: 100 
+    validation_data_file: "data/minipile_validation" 
+    val_check_interval: 1.0 
     my_exit_tokens: 427282462982
     magic_prime: 417267857
 
@@ -29,7 +29,7 @@ train:
     devices: 8
     num_nodes: 1
     micro_bsz: 128
-    accumulate_grad_batches: 4
+    accumulate_grad_batches: 1
     log_every_n_steps: 5
     strategy: deepspeed_stage_2 
     grad_cp: 1

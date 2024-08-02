@@ -99,18 +99,11 @@ class train_callback(pl.Callback):
 
         for param_group in trainer.optimizers[0].param_groups:
             if param_group["weight_decay"] > 0:
-                param_group["weight_decay"] = wd_now
+                param_group["weight_decay"] = wd_now           
+            param_group_lr = lr2 if ('lrtype' in param_group and param_group['lrtype'] == 'lr2') else lr
             if config.train.layerwise_lr > 0:
-                if param_group["name"] == "lr2":
-                    param_group["lr"] = lr2 * param_group["my_lr_scale"]
-                else:
-                    param_group["lr"] = lr * param_group["my_lr_scale"]
-                # print(param_group["lr"], param_group["my_lr_scale"])
-            else:
-                if param_group["name"] == "lr2":
-                    param_group["lr"] = lr2
-                else:
-                    param_group["lr"] = lr
+                param_group_lr *= param_group["my_lr_scale"]            
+            param_group["lr"] = param_group_lr
         trainer.my_lr = lr
         trainer.my_lr2 = lr2
         trainer.my_wd = wd_now
