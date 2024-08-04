@@ -303,6 +303,9 @@ if __name__ == "__main__":
     train_data = MyDataset(config, trainer)
     if config.train.validation_data_file != "":
         validation_data = MMapDataset(config.train.validation_data_file, config.model.ctx_len)
+        if config.train.validation_tokens > 0 and config.train.validation_tokens // (config.model.ctx_len + 1) < len(validation_data):
+            from torch.utils.data import Subset
+            validation_data = Subset(validation_data, range(config.train.validation_tokens // config.model.ctx_len))
     config.model.vocab_size = train_data.vocab_size
 
     # must set shuffle=False, persistent_workers=False (because worker is in another thread)

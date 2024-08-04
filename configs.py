@@ -118,6 +118,7 @@ class Train_Config:
 
     data_file:str = ''
     validation_data_file:str = ''
+    validation_tokens:int = 0
     data_type:str = 'utf-8'
 
 @dataclass(kw_only=True)
