@@ -238,7 +238,7 @@ if __name__ == "__main__":
                                 save_last=True,
                                 monitor='step',
                                 mode='max',
-                                save_top_k=10,
+                                save_top_k=config.train.save_top_k,
                                 dirpath=f'{config.runtime.proj_path}/',
                                 #filename='rwkv-{epoch:02d}-{loss:.2f}'
                                 filename='{epoch:03d}-{step}',
