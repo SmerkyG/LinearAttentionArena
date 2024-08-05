@@ -93,6 +93,7 @@ class Train_Config:
     ckpt_path:str = None
     save_every_n_epochs:int = 0
     save_every_n_steps:int = 0
+    save_top_k:int = 1
 
     weight_decay:float = 0.0
     weight_decay_final:float = -1.0
