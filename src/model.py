@@ -59,39 +59,39 @@ class Block(nn.Module):
 
         if config.tmix2 == '' or layer_id < get_second_submodel_layer_id(config):
             # first layer type
-            tmix = config.tmix
-            cmix = config.cmix
-            cmoe = config.cmoe
+            tmix_name = config.tmix
+            cmix_name = config.cmix
+            cmoe_name = config.cmoe
         else:
             # second layer type
-            tmix = config.tmix2
-            cmix = config.cmix2       
-            cmoe = config.cmoe2
+            tmix_name = config.tmix2
+            cmix_name = config.cmix2       
+            cmoe_name = config.cmoe2
         
-        if tmix == '':
+        if tmix_name == '':
             tmix_factory = lambda config, layer_id: None
         else:
-            tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
+            tmix_typepath = f'tmix.tmix_{tmix_name}.TMix_{tmix_name}'
             tmix_factory = locate(tmix_typepath)
             if tmix_factory is None:
                 print(f"Unsupported tmix component type: {tmix_typepath}")
                 exit(0)
         tmix:nn.Module = tmix_factory(config, layer_id)
         
-        if cmix == '':
+        if cmix_name == '':
             cmix_factory = lambda config, layer_id: None
         else:
-            cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
+            cmix_typepath = f'cmix.cmix_{cmix_name}.CMix_{cmix_name}'
             cmix_factory = locate(cmix_typepath)
             if cmix_factory is None:
                 print(f"Unsupported cmix component type: {cmix_typepath}")
                 exit(0)
         cmix:nn.Module = cmix_factory(config, layer_id)
 
-        if cmoe == '' or config.num_experts <= 0:
+        if cmoe_name == '' or config.num_experts <= 0:
             cmoe_factory = lambda config, layer_id: None
         else:
-            cmoe_typepath = f'cmoe.cmoe_{cmoe}.CMoE_{cmoe}'
+            cmoe_typepath = f'cmoe.cmoe_{cmoe_name}.CMoE_{cmoe_name}'
             cmoe_factory = locate(cmoe_typepath)
             if cmoe_factory is None:
                 print(f"Unsupported cmoe component type: {cmoe_typepath}")
@@ -109,7 +109,11 @@ class Block(nn.Module):
             self.default_channel_mix_state_factory = cmoe.get_default_state_factory() if hasattr(cmoe, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
         else:
             self.default_channel_mix_state_factory = lambda x, c, r: ChannelMixState()
-        self.ffn = TJIT(cmix)
+
+        if 'moe' in cmix_name:
+            self.ffn = cmix #TJIT(cmix)
+        else:
+            self.ffn = TJIT(cmix)
 
         self.cmoe = cmoe
 
