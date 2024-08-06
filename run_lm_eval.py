@@ -64,6 +64,7 @@ if config.path.lower().endswith('.pth'):
     with torch.device('meta'):
         model = Transformer(config)
         wrapper = LightningModelWrapper(model, config)
+        wrapper.train(False) # important to avoid inits which are slow, and for the ds moe hack
         wrapper.configure_model()
     state_dict = torch.load(model_path, mmap=True)
     model.load_state_dict(state_dict, assign=True)
@@ -88,9 +89,9 @@ else:
     #with torch.device('meta'):
     with trainer.init_module(empty_init=True):
         model = Transformer(config)
-        #model.configure_model()
         wrapper = LightningModelWrapper(model, config)
         wrapper.train(False) # important to avoid inits which are slow, and for the ds moe hack
+        #model.configure_model() # done later
     
     # from torch.optim.adamw import AdamW
     # optim_groups = [
@@ -288,7 +289,7 @@ class EvalHarnessAdapter(TemplateLM):
         res = []
 
         with torch.no_grad():
-            B = 48
+            B = 12
             for nb in range(0, len(requests), B):
                 ne = min(nb+B, len(requests))
 

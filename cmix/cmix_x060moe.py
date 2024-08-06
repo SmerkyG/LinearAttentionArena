@@ -58,7 +58,7 @@ class CMix_x060moe(nn.Module):
             if not self.training: #T % self.num_experts != 0:
                 Tnew = (T + self.num_experts - 1) // self.num_experts * self.num_experts
                 # FIXME - pad it a lot more so that we don't go overcapacity during inference
-                Tnew = Tnew * 4
+                Tnew = Tnew * 2
                 xk = torch.nn.functional.pad(xk, [0, 0, 0, Tnew - T])
                 token_ids = torch.nn.functional.pad(token_ids, [0, Tnew - T])
                 dkv = self.moe.forward(xk, token_ids, empty_tensor)
