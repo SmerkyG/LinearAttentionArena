@@ -186,12 +186,12 @@ class Transformer(nn.Module):
 
         self.shared = Shared()
 
-    # def configure_model(self):
-    #     if hasattr(self, 'emb'):
-    #         return
+    def configure_model(self):
+        if hasattr(self, 'emb'):
+            return
 
-    #     config = self.config
-    #     args:Transformer_Config = self.config.model
+        config = self.config
+        args:Transformer_Config = self.config.model
 
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 

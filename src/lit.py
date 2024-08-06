@@ -50,13 +50,26 @@ class LightningModelWrapper(pl.LightningModule):
     def forward(self, idx, last_model_state:ModelState|None = None):
         return self.model.forward(idx, last_model_state)
     
-    # def configure_model(self):
-    #     return self.model.configure_model()
+    def configure_model(self):
+        return self.model.configure_model()
     
     def configure_optimizers(self):
         train_config = self.config.train
         
-        optim_groups = self.model.get_optim_groups()
+        if self.training:
+            optim_groups = self.model.get_optim_groups()
+        else:
+            print("!!!SPECIAL LIGHTNING+DEEPSPEED INFERENCE HACK!!!")
+            print("!!!SPECIAL LIGHTNING+DEEPSPEED INFERENCE HACK!!!")
+            print("!!!SPECIAL LIGHTNING+DEEPSPEED INFERENCE HACK!!!")
+            # special hack for when we are inferencing MoE but need DeepSpeed to play nicely with lightning and yet not load a giant optimizer!            
+            ppp = list(self.parameters())[0:1]
+            setattr(ppp[0], 'allreduce', False)
+            setattr(ppp[0], 'group_name', 'ep_size_8')
+            optim_groups = [
+                {'params': ppp, 'moe':True, 'name':'ep_size_8'},
+            ]
+
 
         betas = (train_config.beta1, train_config.beta2)
         if self.deepspeed_offload:

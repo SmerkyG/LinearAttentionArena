@@ -14,6 +14,7 @@ class CMix_x060moe(nn.Module):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
+        self.num_experts = args.num_experts
 
         with torch.no_grad():  # fancy init of time_mix
             ratio_1_to_almost0 = 1.0 - (layer_id / args.n_layer)  # 1 to ~0
@@ -50,8 +51,21 @@ class CMix_x060moe(nn.Module):
         k = torch.relu(k) ** 2
         kv = self.value(k)
 
+        empty_tensor = x[0:1]
+
         if self.moe is not None:
-            kv = kv + self.moe(xk, token_ids, used_token=torch.tensor([]))
+            B, T, C = xk.shape
+            if not self.training: #T % self.num_experts != 0:
+                Tnew = (T + self.num_experts - 1) // self.num_experts * self.num_experts
+                # FIXME - pad it a lot more so that we don't go overcapacity during inference
+                Tnew = Tnew * 4
+                xk = torch.nn.functional.pad(xk, [0, 0, 0, Tnew - T])
+                token_ids = torch.nn.functional.pad(token_ids, [0, Tnew - T])
+                dkv = self.moe.forward(xk, token_ids, empty_tensor)
+                dkv = dkv[:, :T]
+                kv = kv + dkv
+            else:
+                kv = kv + self.moe.forward(xk, token_ids, empty_tensor)
         if self.ffn is not None:
             kv = kv + self.ffn(xk)
 

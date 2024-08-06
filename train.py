@@ -253,6 +253,7 @@ if __name__ == "__main__":
     with trainer.init_module(empty_init=False):
         model = Transformer(config)
         wrapper = LightningModelWrapper(model, config)
+        wrapper.configure_model()
 
     # if config.train.train_stage == 1:  # should we build the initial weights?
     #     init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"

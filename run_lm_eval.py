@@ -23,6 +23,8 @@ os.environ["RWKV_CUDA_ON"] = '1'
 
 from src.pipeline import PIPELINE, PIPELINE_ARGS
 
+from src.logger import print0 as print
+
 from lm_eval import tasks, evaluator
 from lm_eval.api.model import TemplateLM
 
@@ -55,12 +57,99 @@ model_path = config.path
 
 # Setup the model
 from src.model import Transformer
+from src.lit import LightningModelWrapper
 
 print(f'Loading model - {model_path}')
-state_dict = torch.load(model_path, mmap=True)
-with torch.device('meta'):
-    model = Transformer(config)
-model.load_state_dict(state_dict, assign=True)
+if config.path.lower().endswith('.pth'):
+    with torch.device('meta'):
+        model = Transformer(config)
+        wrapper = LightningModelWrapper(model, config)
+        wrapper.configure_model()
+    state_dict = torch.load(model_path, mmap=True)
+    model.load_state_dict(state_dict, assign=True)
+else:
+    from lightning import Trainer
+    from lightning.pytorch.utilities.migration import pl_legacy_patch
+    from lightning.pytorch.utilities.migration.utils import _pl_migrate_checkpoint
+
+    trainer = Trainer(
+        use_distributed_sampler=False, 
+        enable_checkpointing=False,
+        num_sanity_val_steps=0,
+        logger=False,
+        max_epochs=-1,
+
+        accelerator='gpu',#config.train.accelerator, 
+        strategy='deepspeed_stage_2',#config.train.strategy, 
+        devices=8,#config.train.devices, 
+        num_nodes=1,#config.train.num_nodes, 
+        precision='bf16-mixed',#config.train.precision,
+    )
+    #with torch.device('meta'):
+    with trainer.init_module(empty_init=True):
+        model = Transformer(config)
+        #model.configure_model()
+        wrapper = LightningModelWrapper(model, config)
+        wrapper.train(False) # important to avoid inits which are slow, and for the ds moe hack
+    
+    # from torch.optim.adamw import AdamW
+    # optim_groups = [
+    #     {'params': list(model.parameters())[0:1], 'moe':True},
+    # ]
+    # trainer.optimizers = [AdamW(optim_groups)]
+    #trainer.predict(wrapper, ckpt_path=config.path)
+    
+
+    # simulate the entire Lightning Trainer setup (like what happens when you call fit() or predict())
+    
+    trainer.strategy._lightning_module = wrapper  
+
+    from lightning.pytorch.trainer.states import RunningStage, TrainerFn, TrainerState, TrainerStatus
+    trainer.state.fn = TrainerFn.FITTING #  TrainerFn.PREDICTING #
+    trainer.state.status = TrainerStatus.RUNNING
+    trainer.training = True # Needed for deepspeed strategy to notice optimizers so it doesn't assert about lack of MoE groups
+    #trainer.predicting = True
+
+    def my_setup_deepspeed_and_load_ckpt(wrapper, trainer, config):
+        # Attach the trainer to the LightningModule (deepspeed also senses this when deciding to setup for training or inference)
+        wrapper.trainer = trainer
+
+        # links data to the trainer
+        from torch.utils.data import DataLoader, Dataset
+        trainer._data_connector.attach_data(wrapper, predict_dataloaders=[DataLoader(Dataset())], datamodule=None)
+
+        # attach model to the strategy
+        trainer.strategy.connect(wrapper)
+        # trainer._callback_connector._attach_model_callbacks()
+        # trainer._callback_connector._attach_model_logging_functions()
+
+        # hook
+        #log.debug(f"{self.__class__.__name__}: preparing data")
+        # trainer._data_connector.prepare_data()
+        # import lightning.pytorch.trainer.call
+        # lightning.pytorch.trainer.call._call_setup_hook(trainer)  # allow user to setup lightning_module in accelerator environment
+
+
+        trainer.strategy.setup_environment()
+        #self.__setup_profiler()
+
+        wrapper.configure_model()
+
+        # strategy will configure model and move it to the device
+        trainer.strategy.setup(trainer)
+
+        # so that deepspeed doesn't load the optimizer states!
+        trainer.state.fn = TrainerFn.PREDICTING
+        trainer.predicting = True
+
+        with pl_legacy_patch():
+            loaded_checkpoint = trainer.strategy.load_checkpoint(config.path)
+        loaded_checkpoint = _pl_migrate_checkpoint(loaded_checkpoint, config.path)
+        #wrapper = LightningModelWrapper.load_from_checkpoint(config.path) # doesnt' work with sharded models
+    
+    import lightning.pytorch.trainer.call
+    lightning.pytorch.trainer.call._call_and_handle_interrupt(trainer, my_setup_deepspeed_and_load_ckpt, wrapper, trainer, config)
+
 
 match config.precision:
     case 32:
@@ -198,43 +287,55 @@ class EvalHarnessAdapter(TemplateLM):
 
         res = []
 
-        for COUNTER in range(len(requests)):
-            n = COUNTER
+        with torch.no_grad():
+            B = 48
+            for nb in range(0, len(requests), B):
+                ne = min(nb+B, len(requests))
 
-            src = requests[n][1] + requests[n][2]
+                # stack and pad to longest
+                batch = []
+                batch_info = []
+                maxlen = 0
+                for i in range(nb, ne):
+                    q = RWKV_PAD + requests[i][1]
+                    src = q + requests[i][2]
+                    input = torch.tensor(src, dtype=torch.long, device=device, requires_grad=False)
+                    batch.append( input )
+                    batch_info.append((len(q), len(src)))
+                    maxlen = max(maxlen, len(src))
 
-            src = RWKV_PAD + src
-            inputs = torch.tensor(src, dtype=torch.long, device=device, requires_grad=False).unsqueeze(0)
+                maxlen = (maxlen + 7) // 8 * 8 # round pad size up to nearest 8 for better GPU usage
+                for i in range(len(batch)):
+                    batch[i] = F.pad(batch[i], (0, maxlen - batch[i].size(0)))
+                batch = torch.stack(batch, dim=0)
 
-            sss = str(src)
+                outputs, _ = model.forward(batch, None)
 
-            correct = True
-            if sss in logitBuf:
-                logit = logitBuf[sss]
-                correct = correctBuf[sss]
-            else:
-                q_len = len(requests[n][1])
-                q_len += len(RWKV_PAD)
-                logit = 0
+                batched_logits = F.log_softmax(outputs, dim=-1)
+                # Check if per-token argmax is exactly equal to continuation
+                batched_greedy_toks = batched_logits.argmax(dim=-1)
+
+                for i, info in enumerate(batch_info):
+                    q_len, src_len = info
+                    a_len = src_len - q_len
+                    logits, a_toks, greedy_toks = batched_logits[i, q_len-1 : src_len-1], batch[i, q_len : src_len], batched_greedy_toks[i, q_len-1 : src_len-1]
+                    assert logits.size(0) == a_len
+                    assert a_toks.size(0) == a_len
+                    assert greedy_toks.size(0) == a_len
+                    max_equal = (greedy_toks == a_toks).all()
+
+                    # Obtain log-probs at the corresponding continuation ('answer') token indices
+                    logprobs = torch.gather(logits, 1, a_toks.unsqueeze(-1)).squeeze(-1)
+                    assert logprobs.size(0) == a_len
                 
-                with torch.no_grad():
-                    outputs, _ = model.forward(inputs, None)
-                    for i in range(q_len-1, len(src)-1):
-                        oo = outputs[0,i].detach().float()
-                        dst = src[i+1]
-                        logit += math.log(F.softmax(oo, dim=-1)[dst])
-                        _, s_index = torch.sort(oo, descending=True)
-                        pred = s_index[0].item()
-                        if pred != dst:
-                            correct = False
-                    outputs = None
-                    pred = None
-                logitBuf[sss] = logit
-                correctBuf[sss] = correct
-            
-            res += [(logit, correct)]
-            if n % 1000 == 0:
-                print(f'{n//1000}/{len(requests)//1000}', end = ' ', flush=True)
+                    # Answer: (log prob, is-exact-match)
+                    answer = (float(logprobs.sum()), bool(max_equal))
+
+                    res.append(answer)
+
+                FREQ = 10 * B
+                if nb % FREQ == 0:
+                    print(f'{nb//FREQ}/{len(requests)//FREQ}', end = ' ', flush=True)
         return res
 
 if config.seed is None:
