@@ -23,12 +23,10 @@ os.environ["RWKV_CUDA_ON"] = '1'
 
 from src.pipeline import PIPELINE, PIPELINE_ARGS
 
-from lm_eval import tasks, evaluator
+from lm_eval import tasks, evaluator, utils
 from lm_eval.api.model import TemplateLM
 
 ########################################################################################################
-
-#MODEL_NAME = "/fsx/BlinkDL/HF-MODEL/rwkv-5-world/RWKV-5-World-1.5B-v2-OnlyForTest_14%_trained-20231001-ctx4096"
 
 from dataclasses import dataclass
 import typing
@@ -36,6 +34,7 @@ import typing
 @dataclass(kw_only=True)
 class CLI_Config:
     path: str
+    tasks: str = 'lambada_openai'
     precision: int | str = 'bf16'
     seed: int | None = None
     recurrent: int = 1
@@ -83,14 +82,7 @@ model.eval()
 
 pipeline = PIPELINE(model, "rwkv_vocab_v20230424")
 
-eval_tasks = []
-eval_tasks += ['lambada_openai']
-# eval_tasks += ['hellaswag','winogrande']
-# eval_tasks += ['lambada_openai','piqa','storycloze_2016','hellaswag','winogrande']
-# eval_tasks += ['arc_challenge','arc_easy','headqa','openbookqa','sciq']
-# eval_tasks += ['record','copa']
-# eval_tasks += ['triviaqa']
-# eval_tasks += ['coqa']
+eval_tasks = config.tasks.split(',')
 
 RWKV_PAD = pipeline.tokenizer.encode('\n') # we will use '\n' as PAD
 # RWKV_PAD = [0] # you can try using [0] as pad
@@ -120,39 +112,38 @@ class EvalHarnessAdapter(TemplateLM):
         super().__init__()
         self.tokenizer = TokenizerWrapper(pipeline.tokenizer)
 
-    # def greedy_until(self, requests): # designed for coqa
-    #     res = []
-    #     for i in range(len(requests)):
-    #         if i % 50 == 0:
-    #             print(i)
-    #         otoken = []
-    #         while True:
-    #             src = self.tokenizer.encode(requests[i][0]) + otoken
-
-    #             src = src[-4096:]
-    #             outputs, _ = model.forward(src, None)
-                
-    #             otoken += [int(torch.argmax(outputs))]
-    #             ss = self.tokenizer.decode(otoken)
-    #             if '\n' in ss or len(ss) > 200:
-    #                 if not ss.endswith('\n'):
-    #                     ss = ss + '\n'
-    #                 print(ss)
-    #                 res += [(ss)]
-    #                 break
-    #     print(res)
-    #     return res
-
-
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError(
             "`loglikelihood_rolling` is currently not supported"
         )
     
-    def generate_until(self, requests, disable_tqdm: bool = False):
-        raise NotImplementedError(
-            "`generate_until` is currently not supported"
-        )
+    @torch.no_grad()
+    def generate_until(self, requests):
+        """
+        Generate until is lm_eval harness' way to say "do greedy generation" - necessary for some tasks.
+        the eval harness dispatches requests to the model, and the model does argmax generation, the results of which
+        are returned to the eval harness to evaluate.
+
+        TODO: batched / data parallel generation
+
+        :param requests: Dictionary of requests containing the context (prompt) and 'until' - a token or
+                         list of stop tokens.
+        """
+        res = []
+        # get only the args from each Instance object
+        reqs = [req.args for req in requests]
+
+        def _collate(x):
+            toks = self.tokenizer.encode(x[0])
+            return (len(toks), x[0])
+
+        reord = utils.Reorderer(reqs, _collate)
+        for context, gen_kwargs in tqdm(reord.get_reordered(), "Running greedy generation"):
+            out_str = self.greedy_generate(context)
+            for term in gen_kwargs['until']:
+                out_str = out_str.split(term)[0]
+            res.append(out_str)
+        return reord.get_original(res)
 
     @property
     def eot_token_id(self):
@@ -198,43 +189,55 @@ class EvalHarnessAdapter(TemplateLM):
 
         res = []
 
-        for COUNTER in range(len(requests)):
-            n = COUNTER
+        with torch.no_grad():
+            B = 12
+            for nb in range(0, len(requests), B):
+                ne = min(nb+B, len(requests))
 
-            src = requests[n][1] + requests[n][2]
+                # stack and pad to longest
+                batch = []
+                batch_info = []
+                maxlen = 0
+                for i in range(nb, ne):
+                    q = RWKV_PAD + requests[i][1]
+                    src = q + requests[i][2]
+                    input = torch.tensor(src, dtype=torch.long, device=device, requires_grad=False)
+                    batch.append( input )
+                    batch_info.append((len(q), len(src)))
+                    maxlen = max(maxlen, len(src))
 
-            src = RWKV_PAD + src
-            inputs = torch.tensor(src, dtype=torch.long, device=device, requires_grad=False).unsqueeze(0)
+                maxlen = (maxlen + 7) // 8 * 8 # round pad size up to nearest 8 for better GPU usage
+                for i in range(len(batch)):
+                    batch[i] = F.pad(batch[i], (0, maxlen - batch[i].size(0)))
+                batch = torch.stack(batch, dim=0)
 
-            sss = str(src)
+                outputs, _ = model.forward(batch, None)
 
-            correct = True
-            if sss in logitBuf:
-                logit = logitBuf[sss]
-                correct = correctBuf[sss]
-            else:
-                q_len = len(requests[n][1])
-                q_len += len(RWKV_PAD)
-                logit = 0
+                batched_logits = F.log_softmax(outputs, dim=-1)
+                # Check if per-token argmax is exactly equal to continuation
+                batched_greedy_toks = batched_logits.argmax(dim=-1)
                 
-                with torch.no_grad():
-                    outputs, _ = model.forward(inputs, None)
-                    for i in range(q_len-1, len(src)-1):
-                        oo = outputs[0,i].detach().float()
-                        dst = src[i+1]
-                        logit += math.log(F.softmax(oo, dim=-1)[dst])
-                        _, s_index = torch.sort(oo, descending=True)
-                        pred = s_index[0].item()
-                        if pred != dst:
-                            correct = False
-                    outputs = None
-                    pred = None
-                logitBuf[sss] = logit
-                correctBuf[sss] = correct
+                for i, info in enumerate(batch_info):
+                    q_len, src_len = info
+                    a_len = src_len - q_len
+                    logits, a_toks, greedy_toks = batched_logits[i, q_len-1 : src_len-1], batch[i, q_len : src_len], batched_greedy_toks[i, q_len-1 : src_len-1]
+                    assert logits.size(0) == a_len
+                    assert a_toks.size(0) == a_len
+                    assert greedy_toks.size(0) == a_len
+                    max_equal = (greedy_toks == a_toks).all()
             
-            res += [(logit, correct)]
-            if n % 1000 == 0:
-                print(f'{n//1000}/{len(requests)//1000}', end = ' ', flush=True)
+                    # Obtain log-probs at the corresponding continuation ('answer') token indices
+                    logprobs = torch.gather(logits, 1, a_toks.unsqueeze(-1)).squeeze(-1)
+                    assert logprobs.size(0) == a_len
+                
+                    # Answer: (log prob, is-exact-match)
+                    answer = (float(logprobs.sum()), bool(max_equal))
+
+                    res.append(answer)
+
+                FREQ = 10 * B
+                if nb % FREQ == 0:
+                    print(f'{nb//FREQ}/{len(requests)//FREQ}', end = ' ', flush=True)
         return res
 
 if config.seed is None:
