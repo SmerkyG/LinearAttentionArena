@@ -35,6 +35,7 @@ import typing
 class CLI_Config:
     path: str
     tasks: str = 'lambada_openai'
+    bsz: int = 48
     precision: int | str = 'bf16'
     seed: int | None = None
     recurrent: int = 1
@@ -109,9 +110,10 @@ class EvalHarnessAdapter(TemplateLM):
     # bugfix for lm_eval 0.4.2
     AUTO_MODEL_CLASS = transformers.AutoModelForCausalLM
 
-    def __init__(self):
+    def __init__(self, batch_size_per_gpu):
         super().__init__()
         self.tokenizer = TokenizerWrapper(pipeline.tokenizer)
+        self.batch_size_per_gpu = batch_size_per_gpu
 
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError(
@@ -170,9 +172,8 @@ class EvalHarnessAdapter(TemplateLM):
 
     @property
     def batch_size(self):
-        return 1 
         # TODO: fix multi-gpu
-        #return self.batch_size_per_gpu  # * gpus
+        return self.batch_size_per_gpu  # * gpus
 
     @property
     def device(self):
@@ -184,67 +185,70 @@ class EvalHarnessAdapter(TemplateLM):
 
     def tok_decode(self, tokens):
         return self.tokenizer.decode(tokens)
-            
+    
+    @torch.no_grad()
     def _loglikelihood_tokens(self, requests, disable_tqdm=False):
         global logitBuf, correctBuf
 
         res = []
 
-        with torch.no_grad():
-            B = 12
-            for nb in range(0, len(requests), B):
-                ne = min(nb+B, len(requests))
+        # sort requests by descending total length, so we batch together groups that have similar padded sizes, descending so we OOM early if at all
+        requests = sorted(requests, key=lambda x: len(x[0])+len(x[1]), reverse=True)
 
-                # stack and pad to longest
-                batch = []
-                batch_info = []
-                maxlen = 0
-                for i in range(nb, ne):
-                    q = RWKV_PAD + requests[i][1]
-                    src = q + requests[i][2]
-                    input = torch.tensor(src, dtype=torch.long, device=device, requires_grad=False)
-                    batch.append( input )
-                    batch_info.append((len(q), len(src)))
-                    maxlen = max(maxlen, len(src))
+        B = self.batch_size_per_gpu
+        for nb in range(0, len(requests), B):
+            ne = min(nb+B, len(requests))
 
-                maxlen = (maxlen + 7) // 8 * 8 # round pad size up to nearest 8 for better GPU usage
-                for i in range(len(batch)):
-                    batch[i] = F.pad(batch[i], (0, maxlen - batch[i].size(0)))
-                batch = torch.stack(batch, dim=0)
+            # stack and pad to longest
+            batch = []
+            batch_info = []
+            maxlen = 0
+            for i in range(nb, ne):
+                q = RWKV_PAD + requests[i][1]
+                src = q + requests[i][2]
+                input = torch.tensor(src, dtype=torch.long, device=device, requires_grad=False)
+                batch.append( input )
+                batch_info.append((len(q), len(src)))
+                maxlen = max(maxlen, len(src))
 
-                outputs, _ = model.forward(batch, None)
+            maxlen = (maxlen + 7) // 8 * 8 # round pad size up to nearest 8 for better GPU usage
+            for i in range(len(batch)):
+                batch[i] = F.pad(batch[i], (0, maxlen - batch[i].size(0)))
+            batch = torch.stack(batch, dim=0)
 
-                batched_logits = F.log_softmax(outputs, dim=-1)
-                # Check if per-token argmax is exactly equal to continuation
-                batched_greedy_toks = batched_logits.argmax(dim=-1)
-                
-                for i, info in enumerate(batch_info):
-                    q_len, src_len = info
-                    a_len = src_len - q_len
-                    logits, a_toks, greedy_toks = batched_logits[i, q_len-1 : src_len-1], batch[i, q_len : src_len], batched_greedy_toks[i, q_len-1 : src_len-1]
-                    assert logits.size(0) == a_len
-                    assert a_toks.size(0) == a_len
-                    assert greedy_toks.size(0) == a_len
-                    max_equal = (greedy_toks == a_toks).all()
+            outputs, _ = model.forward(batch, None)
+
+            batched_logits = F.log_softmax(outputs, dim=-1)
+            # Check if per-token argmax is exactly equal to continuation
+            batched_greedy_toks = batched_logits.argmax(dim=-1)
             
-                    # Obtain log-probs at the corresponding continuation ('answer') token indices
-                    logprobs = torch.gather(logits, 1, a_toks.unsqueeze(-1)).squeeze(-1)
-                    assert logprobs.size(0) == a_len
-                
-                    # Answer: (log prob, is-exact-match)
-                    answer = (float(logprobs.sum()), bool(max_equal))
+            for i, info in enumerate(batch_info):
+                q_len, src_len = info
+                a_len = src_len - q_len
+                logits, a_toks, greedy_toks = batched_logits[i, q_len-1 : src_len-1], batch[i, q_len : src_len], batched_greedy_toks[i, q_len-1 : src_len-1]
+                assert logits.size(0) == a_len
+                assert a_toks.size(0) == a_len
+                assert greedy_toks.size(0) == a_len
+                max_equal = (greedy_toks == a_toks).all()
+        
+                # Obtain log-probs at the corresponding continuation ('answer') token indices
+                logprobs = torch.gather(logits, 1, a_toks.unsqueeze(-1)).squeeze(-1)
+                assert logprobs.size(0) == a_len
+            
+                # Answer: (log prob, is-exact-match)
+                answer = (float(logprobs.sum()), bool(max_equal))
 
-                    res.append(answer)
+                res.append(answer)
 
-                FREQ = 10 * B
-                if nb % FREQ == 0:
-                    print(f'{nb//FREQ}/{len(requests)//FREQ}', end = ' ', flush=True)
+            FREQ = 10 * B
+            if nb % FREQ == 0:
+                print(f'{nb//FREQ}/{len(requests)//FREQ}', end = ' ', flush=True)
         return res
 
 if config.seed is None:
     config.seed = 1234 
 
-adapter = EvalHarnessAdapter()
+adapter = EvalHarnessAdapter(batch_size_per_gpu=config.bsz)
 with torch.no_grad():
     with torch.amp.autocast(device_type='cuda', dtype=dtype):
 	    results = evaluator.simple_evaluate(
