@@ -14,7 +14,8 @@ class Model_Config:
     n_layer:int = 6
     n_embd:int = 512
     dropout:float = 0.0
-    inv_other_layer_ratio:float = 3
+    inv_other_layer_ratio:float = 1
+    preserve_last_n_layers:int = 0
     kv_cache_compression_ratio:float = 16
 
 @dataclass(kw_only=True)
@@ -57,6 +58,11 @@ class Runtime_Config:
     epoch_count:int = 999999999
 
 @dataclass(kw_only=True)
+class InferenceConfig:
+    train:typing.Any = None
+    model: Model_Config
+    path:str = ''
+
 class Train_Config:
     seed_everything:int = 1337
 

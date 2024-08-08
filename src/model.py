@@ -38,7 +38,7 @@ except:
 ########################################################################################################
 
 def get_second_submodel_layer_id(model_config:Model_Config):
-    return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio)
+    return int(model_config.n_layer * (model_config.inv_other_layer_ratio - 1) / model_config.inv_other_layer_ratio) - model_config.preserve_last_n_layers
 
 from pydoc import locate
 
@@ -55,7 +55,7 @@ class Block(nn.Module):
         if self.layer_id == 0:
             self.ln0 = nn.LayerNorm(config.n_embd)
 
-        if config.tmix2 == '' or layer_id < get_second_submodel_layer_id(config):
+        if config.inv_other_layer_ratio <= 1 or layer_id < get_second_submodel_layer_id(config) or layer_id >= config.n_layer - config.preserve_last_n_layers:
             # first layer type
             tmix = config.tmix
             cmix = config.cmix
@@ -64,18 +64,24 @@ class Block(nn.Module):
             tmix = config.tmix2
             cmix = config.cmix2       
         
-        tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
-        tmix_factory = locate(tmix_typepath)
-        if tmix_factory is None:
-            print(f"Unsupported tmix model type: {tmix_typepath}")
-            exit(0)
+        if tmix == '':
+            tmix_factory = lambda config, layer_id: None
+        else:
+            tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
+            tmix_factory = locate(tmix_typepath)
+            if tmix_factory is None:
+                print(f"Unsupported tmix model type: {tmix_typepath}")
+                exit(0)
         tmix:nn.Module = tmix_factory(config, layer_id)
         
-        cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
-        cmix_factory = locate(cmix_typepath)
-        if cmix_factory is None:
-            print(f"Unsupported cmix model type: {cmix_typepath}")
-            exit(0)
+        if cmix == '':
+            cmix_factory = lambda config, layer_id: None
+        else:
+            cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
+            cmix_factory = locate(cmix_typepath)
+            if cmix_factory is None:
+                print(f"Unsupported cmix model type: {cmix_typepath}")
+                exit(0)
         cmix:nn.Module = cmix_factory(config, layer_id)
        
         self.is_cache_once = config.tmix2 == 'gold'
@@ -110,8 +116,15 @@ class Block(nn.Module):
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
-            dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
-            dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
+            if self.att is not None:
+                dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
+            else:
+                dx_att, time_mix_state = torch.zeros_like(x), last_block_state.time_mix_state
+            if self.ffn is not None:
+                dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
+            else:
+                dx_ffn, channel_mix_state = torch.zeros_like(x), last_block_state.channel_mix_state
+
             x = self.drop0(x + dx_att + dx_ffn)
 
         return x, BlockState(time_mix_state, channel_mix_state)
@@ -155,8 +168,10 @@ class Transformer(nn.Module):
         self.default_time_mix_state_factories = []
         self.default_channel_mix_state_factories = []
         for block in blocks:
-            self.default_time_mix_state_factories.append(block.att.get_default_state_factory() if hasattr(block.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
-            self.default_channel_mix_state_factories.append(block.ffn.get_default_state_factory() if hasattr(block.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState())        
+            if block.att is not None:
+                self.default_time_mix_state_factories.append(block.att.get_default_state_factory() if hasattr(block.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
+            if block.ffn is not None:
+                self.default_channel_mix_state_factories.append(block.ffn.get_default_state_factory() if hasattr(block.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState())        
         self.blocks = nn.ModuleList([TJIT(block) for block in blocks])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
@@ -171,6 +186,9 @@ class Transformer(nn.Module):
         if self.is_cache_once:
             self.w_kv_cache_a = nn.Linear(args.n_embd, int(args.n_embd / args.kv_cache_compression_ratio), bias=False)
             self.w_kv_cache_b = nn.Linear(int(args.n_embd / args.kv_cache_compression_ratio) + args.n_embd, args.dim_att, bias=False)
+
+        if self.training and hasattr(config, 'train') and config.train is not None and getattr(config.train, 'load_partial', 0):
+            self.init_weights()
 
     def ckpt(self, block, *block_args):
         if block.training and self.config.train.grad_cp == 1:
@@ -315,6 +333,44 @@ class Transformer(nn.Module):
 
         return optim_groups
 
+    def init_weights(self):
+        for name, m in self.named_modules():               
+            scale = 1.0
+            if isinstance(m, nn.Linear):
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+                for kk in [".att.output", ".gold.output", ".ffn.value", ".ffn.receptance"]:
+                    if name.endswith(kk):
+                        scale = 0
+
+                for kk in [".att.key"]:
+                    if name.endswith(kk):
+                        scale = 0.1
+
+                if name == "head":
+                    if self.config.model.vocab_size > self.config.model.n_embd:
+                        scale = 0.5 * math.sqrt(self.config.model.vocab_size / self.config.model.n_embd)
+                    else:
+                        scale = 0.5
+
+                if scale == 0:
+                    nn.init.zeros_(m.weight)
+                else:   
+                    nn.init.orthogonal_(m.weight, gain=scale)
+
+                print(f"{name} scale={scale}")
+            elif isinstance(m, nn.Embedding):
+                nn.init.uniform_(m.weight, a=-1e-4, b=1e-4)
+                print(name, "embed init")
+            elif name.endswith('.ln_x'):
+                layer_id = int(name.split('.')[1])
+                layer_scale = (1+layer_id) / self.config.model.n_layer
+                m.weight = nn.Parameter((m.weight * 0.0) + (layer_scale ** 0.7))
+                print(name, "layer_scale init")
+            else:
+                print(name, "(default init)")
+                
     def generate_init_weight(self):
         print(
             f"""
