@@ -5,7 +5,7 @@ from configs import Transformer_Config
 from src.state import ModelState, TimeMixState, Shared
 from .tmix_rwkv_base import get_default_state
 
-class TMix_x060b(nn.Module):
+class TMix_x060c(nn.Module):
     def get_default_state_factory(self): return get_default_state
 
     def __init__(self, args:Transformer_Config, layer_id):
