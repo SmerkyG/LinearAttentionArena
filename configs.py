@@ -63,6 +63,7 @@ class InferenceConfig:
     model: Model_Config
     path:str = ''
 
+@dataclass(kw_only=True)
 class Train_Config:
     seed_everything:int = 1337
 

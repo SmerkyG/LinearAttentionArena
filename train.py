@@ -173,7 +173,6 @@ if __name__ == "__main__":
                         gradient_clip_val=config.train.gradient_clip_val, 
                         val_check_interval=config.train.val_check_interval)
 
-    with trainer.init_module(empty_init=True):
     with trainer.init_module(empty_init=not config.train.load_partial):
         model = Transformer(config)
         wrapper = LightningModelWrapper(model, config)
