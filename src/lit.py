@@ -126,7 +126,7 @@ class LightningModelWrapper(pl.LightningModule):
                     #str += f"{gb:.1f}gb {int(ms_per)}ms {ktok_per_sec:.2f}kT/s {self.total_runtime:.1f}sec"
                     #print(str)
                     if len(self.config.train.wandb) > 0:
-                        self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
+                        self.trainer.my_wandb.log(logdict, step=self.get_real_global_step(), commit=True)
 
         return L2Wrap.apply(loss, logits)
 
@@ -149,7 +149,7 @@ class LightningModelWrapper(pl.LightningModule):
                 str += f"{metric_value:.4f} "
                 metric.clear()
             if len(self.config.train.wandb) > 0:
-                self.trainer.my_wandb.log(logdict, step=self.get_real_global_step())
+                self.trainer.my_wandb.log(logdict, step=self.get_real_global_step(), commit=True)
 
             console_clear_last_line()
             print(str)

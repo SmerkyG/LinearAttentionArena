@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 
-from src.state import TimeMixState, Shared
+from src.state import ModelState, TimeMixState, Shared
 
 from src.rotary import generate_rotary_embedding, generate_binary_rotary_embedding, apply_rotary_embedding
 
@@ -51,8 +51,8 @@ class TMix_gptalpha(nn.Module):
         self.ln_v = nn.LayerNorm(args.dim_att)
         self.ln_x = nn.LayerNorm(args.dim_att)
 
-    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
-        B, T, C = x.size()
+    def forward(self, x, xo, kv_cache, last_model_state:ModelState, shared:Shared):
+        last_state = last_model_state.block_states[self.layer_id].time_mix_state
         H = self.n_head
         K = C // H
         V = C // H

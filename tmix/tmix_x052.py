@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 from cuda.rwkv5_cuda import RUN_CUDA_RWKV5
-from src.state import TimeMixState, Shared
+from src.state import ModelState, TimeMixState, Shared
 
 from configs import Transformer_Config
 from .tmix_rwkv_base import get_default_state
@@ -56,8 +56,8 @@ class TMix_x052(nn.Module):
         self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, args.dim_att)
 
-    def forward(self, x, xo, kv_cache, last_state:TimeMixState, shared:Shared):
-        B, T, C = x.size()
+    def forward(self, x, xo, kv_cache, last_model_state:ModelState, shared:Shared):
+        last_state = last_model_state.block_states[self.layer_id].time_mix_state
         shift_state = x[:, -1].clone()
     
         # Mix x with the previous timestep to produce xk, xv, xr

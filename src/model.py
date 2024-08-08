@@ -57,40 +57,40 @@ class Block(nn.Module):
 
         if config.inv_other_layer_ratio <= 1 or layer_id < get_second_submodel_layer_id(config) or layer_id >= config.n_layer - config.preserve_last_n_layers:
             # first layer type
-            tmix = config.tmix
-            cmix = config.cmix
+            tmix_name = config.tmix
+            cmix_name = config.cmix
         else:
             # second layer type
-            tmix = config.tmix2
-            cmix = config.cmix2       
+            tmix_name = config.tmix2
+            cmix_name = config.cmix2       
         
-        if tmix == '':
+        if tmix_name == '':
             tmix_factory = lambda config, layer_id: None
         else:
-            tmix_typepath = f'tmix.tmix_{tmix}.TMix_{tmix}'
+            tmix_typepath = f'tmix.tmix_{tmix_name}.TMix_{tmix_name}'
             tmix_factory = locate(tmix_typepath)
             if tmix_factory is None:
-                print(f"Unsupported tmix model type: {tmix_typepath}")
+                print(f"Unsupported tmix component type: {tmix_typepath}")
                 exit(0)
         tmix:nn.Module = tmix_factory(config, layer_id)
         
-        if cmix == '':
+        if cmix_name == '':
             cmix_factory = lambda config, layer_id: None
         else:
-            cmix_typepath = f'cmix.cmix_{cmix}.CMix_{cmix}'
+            cmix_typepath = f'cmix.cmix_{cmix_name}.CMix_{cmix_name}'
             cmix_factory = locate(cmix_typepath)
             if cmix_factory is None:
-                print(f"Unsupported cmix model type: {cmix_typepath}")
+                print(f"Unsupported cmix component type: {cmix_typepath}")
                 exit(0)
         cmix:nn.Module = cmix_factory(config, layer_id)
        
         self.is_cache_once = config.tmix2 == 'gold'
 
-        #self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
-        self.att = tmix
+        self.default_time_mix_state_factory = tmix.get_default_state_factory() if hasattr(tmix, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
+        self.att = TJIT(tmix)
         
-        #self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
-        self.ffn = cmix
+        self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
+        self.ffn = TJIT(cmix)
 
         if config.dropout > 0:
             self.drop0 = nn.Dropout(p = config.dropout)
@@ -100,28 +100,29 @@ class Block(nn.Module):
             self.drop1 = nn.Identity()
 
     @TCompile
-    def forward(self, x, x_original_cache, kv_cache, last_model_state:ModelState, shared:Shared):
+    def forward(self, x, x_original_cache, k_cache, last_model_state:ModelState, shared:Shared):
         last_block_state:BlockState = last_model_state.block_states[self.layer_id]
 
         if not self.parallel:
             if self.att is not None:
-                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
+                dx, time_mix_state = self.att(self.ln1(x), x_original_cache, k_cache, last_model_state, shared)
                 x = self.drop0(x + dx)
             else:
                 time_mix_state = last_block_state.time_mix_state
-            if self.ln2 is not None and self.ffn is not None:
-                dx, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
-                x = self.drop0(x + dx)
+            ln2x = self.ln2(x)
+            if self.ffn is not None:
+                dffn_x, channel_mix_state = self.ffn(ln2x, last_model_state)
+                x = x + dffn_x
             else:
                 channel_mix_state = ChannelMixState()
         else:
             # parallel
             if self.att is not None:
-                dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_block_state.time_mix_state, shared)
+                dx_att, time_mix_state = self.att(self.ln1(x), x_original_cache, kv_cache, last_model_state, shared)
             else:
                 dx_att, time_mix_state = torch.zeros_like(x), last_block_state.time_mix_state
             if self.ffn is not None:
-                dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_block_state.channel_mix_state)
+                dx_ffn, channel_mix_state = self.ffn(self.ln2(x), last_model_state)
             else:
                 dx_ffn, channel_mix_state = torch.zeros_like(x), last_block_state.channel_mix_state
 
@@ -165,14 +166,7 @@ class Transformer(nn.Module):
         self.emb = nn.Embedding(args.vocab_size, args.n_embd)
 
         blocks = [Block(config.model, i) for i in range(args.n_layer)]
-        self.default_time_mix_state_factories = []
-        self.default_channel_mix_state_factories = []
-        for block in blocks:
-            if block.att is not None:
-                self.default_time_mix_state_factories.append(block.att.get_default_state_factory() if hasattr(block.att, 'get_default_state_factory') else lambda x, c, r: TimeMixState())
-            if block.ffn is not None:
-                self.default_channel_mix_state_factories.append(block.ffn.get_default_state_factory() if hasattr(block.ffn, 'get_default_state_factory') else lambda x, c, r: ChannelMixState())        
-        self.blocks = nn.ModuleList([TJIT(block) for block in blocks])
+        self.blocks = nn.ModuleList([block for block in blocks])
 
         self.ln_out = nn.LayerNorm(args.n_embd)
         self.head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
@@ -200,26 +194,26 @@ class Transformer(nn.Module):
             x, next_block_state = block(*block_args)
         return x, next_block_state
 
-    def forward(self, idx:Tensor|list, last_model_state:ModelState|None = None):
+    def forward(self, token_ids:Tensor|list, last_model_state:ModelState|None = None):
         config : Transformer_Config = self.config.model
-        if isinstance(idx, Tensor):
-            B, T = idx.size()
+        if isinstance(token_ids, Tensor):
+            B, T = token_ids.size()
         else:
             B = 1
-            T = len(idx)
-            idx = torch.tensor(idx, device=self.emb.weight.device, dtype=torch.long, requires_grad=False)[None, :]
+            T = len(token_ids)
+            token_ids = torch.tensor(token_ids, device=self.emb.weight.device, dtype=torch.long, requires_grad=False)[None, :]
 
         shared = self.shared
         if config.rope is not None and shared.angles.size(0) == 0:
-            shared.angles = generate_rotary_embedding(config.ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale).to(idx.device)
+            shared.angles = generate_rotary_embedding(config.ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale).to(token_ids.device)
         elif config.brope is not None and shared.angles.size(0) == 0:
-            shared.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size, config.brope.rescale).to(idx.device)
+            shared.angles = generate_binary_rotary_embedding(config.ctx_len, config.head_size, config.brope.rescale).to(token_ids.device)
         elif config.alibi is not None and self.bias_mask.size(0) == 0:
-            shared.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head).to(idx.device)
+            shared.bias_mask = alibi_mask(config.ctx_len, self.n_kv_head).to(token_ids.device)
 
         assert (shared.angles.size(0) == 0 or T <= shared.angles.size(0)) or (shared.bias_mask.size(0) == 0 or T <= shared.bias_mask.size(0))
 
-        x = self.emb(idx)
+        x = self.emb(token_ids)
 
         total_n_layer = config.n_layer
 
@@ -230,8 +224,8 @@ class Transformer(nn.Module):
             for layer_id in range(total_n_layer):
                 block = self.blocks[layer_id]
                 last_model_state.block_states.append(BlockState(
-                    self.default_time_mix_state_factories[layer_id](x, config, requires_grad),
-                    self.default_channel_mix_state_factories[layer_id](x, config, requires_grad),
+                    block.default_time_mix_state_factory(x, config, requires_grad),
+                    block.default_channel_mix_state_factory(x, config, requires_grad),
                 ))
             if self.is_cache_once:
                 last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
@@ -248,9 +242,8 @@ class Transformer(nn.Module):
                 self.blocks[0].ln0(self.drop0(self.emb( last_model_state.input_tokens_cache ))),
                 x
             ], dim=-2)
-            next_model_state.input_tokens_cache = torch.cat([last_model_state.input_tokens_cache, idx], dim=-1)
         else:
-            x_original_from_input_cache = torch.tensor([])
+            x_original_from_input_cache = torch.zeros([B, 0, config.dim_att], dtype=x.dtype, device=x.device)
         for layer_id in range(total_n_layer):
             block = self.blocks[layer_id]
 
@@ -267,6 +260,7 @@ class Transformer(nn.Module):
         x = self.ln_out(x)
         x = self.head(x)
         next_model_state.k_cache = k_cache
+        next_model_state.input_tokens_cache = last_model_state.input_tokens_cache
         return x, next_model_state
 
     def get_optim_groups(self):
@@ -437,7 +431,7 @@ class Transformer(nn.Module):
             else:
                 assert n.endswith('.weight') # should always be true
 
-                zero = [".att.output.", ".ffn.value.", ".ffn.receptance."]
+                zero = [".att.output.", ".gold.output", ".ffn.value.", ".ffn.receptance."]
 
                 for kk in zero:
                     if kk in n:
