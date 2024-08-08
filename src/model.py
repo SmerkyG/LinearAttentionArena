@@ -228,7 +228,7 @@ class Transformer(nn.Module):
                     block.default_channel_mix_state_factory(x, config, requires_grad),
                 ))
             if self.is_cache_once:
-                last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=idx.device, requires_grad=False)
+                last_model_state.input_tokens_cache = torch.zeros([B, 0], dtype=torch.long, device=x.device, requires_grad=False)
                 last_model_state.k_cache = torch.zeros([B, 0, config.dim_att], dtype=x.dtype, device=x.device, requires_grad=requires_grad)
 
         x = self.drop0(x)
