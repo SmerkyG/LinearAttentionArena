@@ -53,6 +53,7 @@ class TMix_gptalpha(nn.Module):
 
     def forward(self, x, xo, kv_cache, last_model_state:ModelState, shared:Shared):
         last_state = last_model_state.block_states[self.layer_id].time_mix_state
+        B, T, C = x.shape
         H = self.n_head
         K = C // H
         V = C // H
